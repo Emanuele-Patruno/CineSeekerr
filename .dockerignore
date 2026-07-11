@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+.idea/
+*.iml
+.mvn/
+mvnw
+mvnw.cmd
+docker-compose.yml
+README.md
+LICENSE
+.env

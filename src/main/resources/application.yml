@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: cineseekerr
+  http:
+    client:
+      # Applied to every RestClient. The read timeout is generous because a Prowlarr
+      # search fanning out to FlareSolverr-backed indexers can take tens of seconds.
+      # The "simple" factory (HttpURLConnection) is enough for this bot's traffic and
+      # avoids spinning up the JDK HttpClient's selector threads.
+      factory: simple
+      connect-timeout: 10s
+      read-timeout: 90s
+
+# All secrets and environment-specific values come from environment variables.
+# See README.md for the full list and docker-compose.yml for a working example.
+cineseekerr:
+  telegram:
+    bot-token: ${TELEGRAM_BOT_TOKEN:}
+    # Comma-separated list of Telegram chat IDs allowed to talk to the bot.
+    # Everyone else is silently ignored.
+    allowed-chat-ids: ${TELEGRAM_ALLOWED_CHAT_IDS:}
+  tmdb:
+    # Either a v3 API key or a v4 Read Access Token — both are supported.
+    api-key: ${TMDB_API_KEY:}
+    base-url: ${TMDB_BASE_URL:https://api.themoviedb.org/3}
+    language: ${TMDB_LANGUAGE:it-IT}
+  prowlarr:
+    base-url: ${PROWLARR_URL:}
+    api-key: ${PROWLARR_API_KEY:}
+  qbittorrent:
+    base-url: ${QBITTORRENT_URL:}
+    username: ${QBITTORRENT_USER:}
+    password: ${QBITTORRENT_PASS:}
+  media:
+    # Save path passed to qBittorrent and later renamed to "Title (Year)" for Plex.
+    root-folder: ${MEDIA_ROOT_FOLDER:/volume1/media/Film}
+  download:
+    # How often the bot polls qBittorrent for completed downloads (ISO-8601 duration).
+    poll-interval: ${DOWNLOAD_POLL_INTERVAL:PT30S}
+
+logging:
+  level:
+    com.cineseekerr.bot: INFO
