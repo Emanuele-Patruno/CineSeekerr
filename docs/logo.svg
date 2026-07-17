@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 205" width="200" height="205" role="img" aria-label="CineSeekerr logo">
+  <title>CineSeekerr</title>
+  <style>
+    .mark-fg { fill: #141414; }
+    @media (prefers-color-scheme: dark) {
+      .mark-fg { fill: #FFFFFF; }
+    }
+  </style>
+  <circle cx="95" cy="95" r="65" fill="none" stroke="#6D28D9" stroke-width="15"/>
+  <polygon class="mark-fg" points="74,67 74,123 129,95"/>
+  <line x1="141" y1="141" x2="176.4" y2="176.4" stroke="#6D28D9" stroke-width="15" stroke-linecap="round"/>
+</svg>
