@@ -20,8 +20,9 @@ the `*arr` family (Radarr, Sonarr, Prowlarr) it plugs into. Designed for a small
 stack, but any Docker host works.
 
 <p align="center">
-  <img src="docs/screenshot-placeholder.png" alt="Bot conversation screenshot" width="380">
-  <br><em>(screenshot coming soon)</em>
+  <img width="720" height="1560" alt="image" src="https://github.com/user-attachments/assets/64144d48-6c78-42d2-b000-904d6fd9b1dd" />
+  <img width="720" height="1560" alt="image" src="https://github.com/user-attachments/assets/de21bad0-533a-4f71-8e02-919a676c5df1" />
+  <img width="720" height="1560" alt="image" src="https://github.com/user-attachments/assets/acb2ed0a-7ae7-4cfe-95e6-257c0aebf61f" />
 </p>
 
 ## ✨ Features
