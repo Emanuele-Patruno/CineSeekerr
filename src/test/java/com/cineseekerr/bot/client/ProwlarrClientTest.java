@@ -62,11 +62,11 @@ class ProwlarrClientTest {
         return new CineSeekerrProperties(
                 null, null,
                 new CineSeekerrProperties.Prowlarr("http://prowlarr:9696", "secret-key"),
-                null, null);
+                null, null, null);
     }
 
     @Test
-    void searchSendsApiKeyAndMoviesCategory() {
+    void movieSearchSendsApiKeyAndMoviesCategory() {
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://prowlarr:9696/api/v1/search")))
                 .andExpect(header("X-Api-Key", "secret-key"))
                 .andExpect(queryParam("query", "Dune%20Part%20Two%202024"))
@@ -74,7 +74,18 @@ class ProwlarrClientTest {
                 .andExpect(queryParam("type", "search"))
                 .andRespond(withSuccess(SEARCH_JSON, MediaType.APPLICATION_JSON));
 
-        client.search("Dune Part Two 2024");
+        client.search("Dune Part Two 2024", com.cineseekerr.bot.model.MediaType.MOVIE);
+        server.verify();
+    }
+
+    @Test
+    void tvSearchUsesTheTvCategory() {
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://prowlarr:9696/api/v1/search")))
+                .andExpect(queryParam("query", "Breaking%20Bad"))
+                .andExpect(queryParam("categories", "5000"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON));
+
+        client.search("Breaking Bad", com.cineseekerr.bot.model.MediaType.TV);
         server.verify();
     }
 
@@ -83,7 +94,8 @@ class ProwlarrClientTest {
         server.expect(requestTo(org.hamcrest.Matchers.containsString("/api/v1/search")))
                 .andRespond(withSuccess(SEARCH_JSON, MediaType.APPLICATION_JSON));
 
-        List<ProwlarrRelease> releases = client.search("Dune Part Two 2024");
+        List<ProwlarrRelease> releases = client.search("Dune Part Two 2024",
+                com.cineseekerr.bot.model.MediaType.MOVIE);
 
         assertThat(releases)
                 .as("usenet results and results without any download link are dropped")
@@ -103,7 +115,7 @@ class ProwlarrClientTest {
         server.expect(requestTo(org.hamcrest.Matchers.containsString("/api/v1/search")))
                 .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON));
 
-        assertThat(client.search("nothing")).isEmpty();
+        assertThat(client.search("nothing", com.cineseekerr.bot.model.MediaType.MOVIE)).isEmpty();
     }
 
     @Test
@@ -111,7 +123,7 @@ class ProwlarrClientTest {
         server.expect(requestTo(org.hamcrest.Matchers.containsString("/api/v1/search")))
                 .andRespond(withServerError());
 
-        assertThatThrownBy(() -> client.search("Dune"))
+        assertThatThrownBy(() -> client.search("Dune", com.cineseekerr.bot.model.MediaType.MOVIE))
                 .isInstanceOf(ApiClientException.class)
                 .hasMessageContaining("Prowlarr");
     }

@@ -23,7 +23,7 @@ class ReleaseFiltersTest {
                 "guid", "name", 1000L, seeders, 0, "indexer", 1,
                 "http://dl", null, null, "torrent");
         ParsedRelease parsed = new ParsedRelease("name", resolution, audio, subs,
-                !subs.isEmpty(), VideoCodec.X264, ReleaseSource.BLURAY);
+                !subs.isEmpty(), VideoCodec.X264, ReleaseSource.BLURAY, Set.of(), null);
         return new SearchResult(release, parsed);
     }
 

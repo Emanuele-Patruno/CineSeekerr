@@ -1,5 +1,7 @@
 package com.cineseekerr.bot.bot.download;
 
+import com.cineseekerr.bot.model.TmdbTitle;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +15,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -35,11 +38,18 @@ public class DownloadTracker {
     /**
      * @param chatId       chat to notify on completion
      * @param releaseTitle release name as reported by Prowlarr
-     * @param plexName     display name shown in notifications (e.g. "Title (Year)"); also
-     *                     the rename target
+     * @param plexName     display name shown in notifications (e.g. "Title (Year)" or
+     *                     "Show (Year) — Stagione 2"); also the rename target for movies
+     * @param tmdbTitle    the TMDB title this download is for, used to search again if the
+     *                     download stalls; {@code null} for entries tracked without one
+     * @param season       season number for a TV download; {@code null} for movies
+     * @param episode      episode number for a single-episode download; {@code null} for
+     *                     whole-season packs and movies
      * @param addedAt      when the download was queued, used to expire unmatched entries
      */
-    public record PendingDownload(long chatId, String releaseTitle, String plexName, Instant addedAt) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PendingDownload(long chatId, String releaseTitle, String plexName, TmdbTitle tmdbTitle,
+                                   Integer season, Integer episode, Instant addedAt) {
     }
 
     private final Map<String, PendingDownload> pending = new ConcurrentHashMap<>();
@@ -54,11 +64,22 @@ public class DownloadTracker {
     }
 
     public void track(long chatId, String releaseTitle, String plexName) {
-        track(chatId, releaseTitle, plexName, Instant.now());
+        track(chatId, releaseTitle, plexName, null, null, null, Instant.now());
     }
 
     public void track(long chatId, String releaseTitle, String plexName, Instant addedAt) {
-        pending.put(normalize(releaseTitle), new PendingDownload(chatId, releaseTitle, plexName, addedAt));
+        track(chatId, releaseTitle, plexName, null, null, null, addedAt);
+    }
+
+    public void track(long chatId, String releaseTitle, String plexName, TmdbTitle tmdbTitle, Integer season,
+                      Integer episode) {
+        track(chatId, releaseTitle, plexName, tmdbTitle, season, episode, Instant.now());
+    }
+
+    public void track(long chatId, String releaseTitle, String plexName, TmdbTitle tmdbTitle, Integer season,
+                      Integer episode, Instant addedAt) {
+        pending.put(normalize(releaseTitle),
+                new PendingDownload(chatId, releaseTitle, plexName, tmdbTitle, season, episode, addedAt));
         persist();
     }
 
@@ -69,6 +90,23 @@ public class DownloadTracker {
     public void remove(String key) {
         pending.remove(key);
         persist();
+    }
+
+    /**
+     * Finds the pending download whose release title matches a qBittorrent torrent name —
+     * used to resolve the "retry search" button on a stalled-download notification, where
+     * only the torrent hash is available.
+     */
+    public Optional<Map.Entry<String, PendingDownload>> findByTorrentName(String torrentName) {
+        String normalized = normalize(torrentName);
+        if (normalized.isBlank()) {
+            return Optional.empty();
+        }
+        return pending.entrySet().stream()
+                .filter(e -> normalized.equals(e.getKey())
+                        || normalized.contains(e.getKey())
+                        || e.getKey().contains(normalized))
+                .findFirst();
     }
 
     public boolean isEmpty() {

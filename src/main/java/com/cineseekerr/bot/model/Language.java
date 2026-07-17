@@ -15,6 +15,10 @@ public enum Language {
     FRE("FRE"),
     GER("GER"),
     SPA("SPA"),
+    JAP("JAP"),
+    KOR("KOR"),
+    RUS("RUS"),
+    POR("POR"),
     MULTI("MULTI"),
     DUAL("DUAL");
 

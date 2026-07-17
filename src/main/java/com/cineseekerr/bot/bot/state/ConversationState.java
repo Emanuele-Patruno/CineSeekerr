@@ -3,7 +3,8 @@ package com.cineseekerr.bot.bot.state;
 import com.cineseekerr.bot.model.Language;
 import com.cineseekerr.bot.model.Resolution;
 import com.cineseekerr.bot.model.SearchResult;
-import com.cineseekerr.bot.model.TmdbMovie;
+import com.cineseekerr.bot.model.TmdbSeason;
+import com.cineseekerr.bot.model.TmdbTitle;
 
 import java.util.List;
 
@@ -15,8 +16,14 @@ import java.util.List;
 public final class ConversationState {
 
     private ConversationStep step = ConversationStep.AWAITING_MOVIE_CHOICE;
-    private List<TmdbMovie> candidates = List.of();
-    private TmdbMovie movie;
+    private List<TmdbTitle> candidates = List.of();
+    private TmdbTitle title;
+    /** The series' seasons as reported by TMDB, kept to build the episode picker. */
+    private List<TmdbSeason> seasons = List.of();
+    /** Season chosen for a TV series; {@code null} for movies. */
+    private Integer season;
+    /** Episode chosen within the season; {@code null} means the whole season pack. */
+    private Integer episode;
     /** Working set of releases, progressively narrowed by each filter step. */
     private List<SearchResult> filtered = List.of();
     private Resolution qualityFilter;
@@ -34,20 +41,44 @@ public final class ConversationState {
         this.step = step;
     }
 
-    public List<TmdbMovie> candidates() {
+    public List<TmdbTitle> candidates() {
         return candidates;
     }
 
-    public void setCandidates(List<TmdbMovie> candidates) {
+    public void setCandidates(List<TmdbTitle> candidates) {
         this.candidates = List.copyOf(candidates);
     }
 
-    public TmdbMovie movie() {
-        return movie;
+    public TmdbTitle title() {
+        return title;
     }
 
-    public void setMovie(TmdbMovie movie) {
-        this.movie = movie;
+    public void setTitle(TmdbTitle title) {
+        this.title = title;
+    }
+
+    public List<TmdbSeason> seasons() {
+        return seasons;
+    }
+
+    public void setSeasons(List<TmdbSeason> seasons) {
+        this.seasons = List.copyOf(seasons);
+    }
+
+    public Integer season() {
+        return season;
+    }
+
+    public void setSeason(Integer season) {
+        this.season = season;
+    }
+
+    public Integer episode() {
+        return episode;
+    }
+
+    public void setEpisode(Integer episode) {
+        this.episode = episode;
     }
 
     public List<SearchResult> filtered() {

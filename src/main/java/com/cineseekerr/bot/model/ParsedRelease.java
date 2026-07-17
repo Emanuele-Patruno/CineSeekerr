@@ -21,6 +21,10 @@ import java.util.Set;
  *                          explicit language
  * @param codec             video codec, {@link VideoCodec#UNKNOWN} if not detected
  * @param source            source medium, {@link ReleaseSource#UNKNOWN} if not detected
+ * @param seasons           TV seasons covered by the release ({@code S01} → [1],
+ *                          {@code Stagioni 1-4} → [1..4]); empty for movies
+ * @param episode           episode number for single-episode releases ({@code S01E05});
+ *                          {@code null} for season packs and movies
  */
 public record ParsedRelease(
         String rawName,
@@ -29,17 +33,33 @@ public record ParsedRelease(
         Set<Language> subtitleLanguages,
         boolean subtitled,
         VideoCodec codec,
-        ReleaseSource source) {
+        ReleaseSource source,
+        Set<Integer> seasons,
+        Integer episode) {
 
     public ParsedRelease {
         audioLanguages = immutableCopy(audioLanguages);
         subtitleLanguages = immutableCopy(subtitleLanguages);
+        seasons = seasons == null || seasons.isEmpty() ? Set.of() : Set.copyOf(seasons);
     }
 
     /** A release from which nothing could be extracted. */
     public static ParsedRelease empty(String rawName) {
         return new ParsedRelease(rawName, Resolution.UNKNOWN, Set.of(), Set.of(), false,
-                VideoCodec.UNKNOWN, ReleaseSource.UNKNOWN);
+                VideoCodec.UNKNOWN, ReleaseSource.UNKNOWN, Set.of(), null);
+    }
+
+    /**
+     * True if this release is a full-season pack covering {@code season}: it must carry
+     * that season's tag and no single-episode tag.
+     */
+    public boolean isSeasonPack(int season) {
+        return seasons.contains(season) && episode == null;
+    }
+
+    /** True if this release is exactly the single episode {@code season}x{@code episode}. */
+    public boolean isEpisode(int season, int episode) {
+        return seasons.contains(season) && this.episode != null && this.episode == episode;
     }
 
     /** True only if the release name explicitly lists {@code language} as an audio track. */

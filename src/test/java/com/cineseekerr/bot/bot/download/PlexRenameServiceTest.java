@@ -78,6 +78,46 @@ class PlexRenameServiceTest {
     }
 
     @Test
+    void seasonPackWithRootFolderIsRenamedToSeasonFolder() {
+        when(qbittorrent.listFiles("h")).thenReturn(List.of(
+                file("Breaking.Bad.S01.iTA.1080p/Breaking.Bad.S01E01.mkv"),
+                file("Breaking.Bad.S01.iTA.1080p/Breaking.Bad.S01E02.mkv")));
+
+        boolean renamed = service.renameSeasonForPlex("h", 1);
+
+        assertThat(renamed).isTrue();
+        verify(qbittorrent).renameFolder("h", "Breaking.Bad.S01.iTA.1080p", "Season 01");
+    }
+
+    @Test
+    void seasonPackWithLooseFilesGetsThemMovedIntoTheSeasonFolder() {
+        when(qbittorrent.listFiles("h")).thenReturn(List.of(
+                file("Show.S02E01.mkv"),
+                file("Show.S02E02.mkv")));
+
+        boolean renamed = service.renameSeasonForPlex("h", 2);
+
+        assertThat(renamed).isTrue();
+        verify(qbittorrent).renameFile("h", "Show.S02E01.mkv", "Season 02/Show.S02E01.mkv");
+        verify(qbittorrent).renameFile("h", "Show.S02E02.mkv", "Season 02/Show.S02E02.mkv");
+    }
+
+    @Test
+    void alreadyCorrectSeasonFolderIsLeftAlone() {
+        when(qbittorrent.listFiles("h")).thenReturn(List.of(file("Season 03/ep1.mkv")));
+
+        assertThat(service.renameSeasonForPlex("h", 3)).isTrue();
+        verify(qbittorrent, never()).renameFolder(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void seasonRenameApiFailureYieldsFalseInsteadOfThrowing() {
+        when(qbittorrent.listFiles("h")).thenThrow(new ApiClientException("down"));
+
+        assertThat(service.renameSeasonForPlex("h", 1)).isFalse();
+    }
+
+    @Test
     void plexNameStripsIllegalCharactersAndAppendsYear() {
         assertThat(PlexRenameService.plexName("Dune: Part Two", 2024)).isEqualTo("Dune Part Two (2024)");
         assertThat(PlexRenameService.plexName("What If...?", null)).isEqualTo("What If...");

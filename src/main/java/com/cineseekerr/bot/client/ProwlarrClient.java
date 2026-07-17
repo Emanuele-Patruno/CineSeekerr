@@ -1,6 +1,7 @@
 package com.cineseekerr.bot.client;
 
 import com.cineseekerr.bot.config.CineSeekerrProperties;
+import com.cineseekerr.bot.model.MediaType;
 import com.cineseekerr.bot.model.ProwlarrRelease;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,8 +22,9 @@ public class ProwlarrClient {
 
     private static final Logger log = LoggerFactory.getLogger(ProwlarrClient.class);
 
-    /** Newznab/Torznab top-level category for movies. */
+    /** Newznab/Torznab top-level categories. */
     private static final String MOVIES_CATEGORY = "2000";
+    private static final String TV_CATEGORY = "5000";
     private static final int RESULT_LIMIT = 100;
 
     private final RestClient restClient;
@@ -36,17 +38,18 @@ public class ProwlarrClient {
     }
 
     /**
-     * Searches all indexers for {@code query} (typically {@code "title year"}) in the
-     * movies category. Only torrent results that can actually be downloaded are returned;
+     * Searches all indexers for {@code query} in the category matching {@code mediaType}
+     * (movies or TV). Only torrent results that can actually be downloaded are returned;
      * usenet results are dropped because the download side of this bot is qBittorrent.
      */
-    public List<ProwlarrRelease> search(String query) {
+    public List<ProwlarrRelease> search(String query, MediaType mediaType) {
+        String category = mediaType == MediaType.TV ? TV_CATEGORY : MOVIES_CATEGORY;
         List<ProwlarrRelease> results;
         try {
             results = restClient.get()
                     .uri(uriBuilder -> uriBuilder.path("/api/v1/search")
                             .queryParam("query", query)
-                            .queryParam("categories", MOVIES_CATEGORY)
+                            .queryParam("categories", category)
                             .queryParam("type", "search")
                             .queryParam("limit", RESULT_LIMIT)
                             .build())

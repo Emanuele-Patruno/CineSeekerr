@@ -59,7 +59,7 @@ class QbittorrentClientTest {
 
     private CineSeekerrProperties properties() {
         return new CineSeekerrProperties(null, null, null,
-                new CineSeekerrProperties.Qbittorrent(BASE, "admin", "secret"), null);
+                new CineSeekerrProperties.Qbittorrent(BASE, "admin", "secret"), null, null);
     }
 
     private DefaultResponseCreator loginOk(String sid) {

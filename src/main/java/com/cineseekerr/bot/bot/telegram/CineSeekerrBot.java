@@ -1,6 +1,7 @@
 package com.cineseekerr.bot.bot.telegram;
 
 import com.cineseekerr.bot.bot.ConversationHandler;
+import com.cineseekerr.bot.bot.Messages;
 import com.cineseekerr.bot.config.CineSeekerrProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,13 +25,16 @@ public class CineSeekerrBot implements LongPollingSingleThreadUpdateConsumer {
 
     private final ConversationHandler handler;
     private final TelegramMessenger messenger;
+    private final Messages messages;
     private final Set<Long> allowedChatIds;
 
     public CineSeekerrBot(ConversationHandler handler,
                         TelegramMessenger messenger,
-                        CineSeekerrProperties properties) {
+                        CineSeekerrProperties properties,
+                        Messages messages) {
         this.handler = handler;
         this.messenger = messenger;
+        this.messages = messages;
         this.allowedChatIds = properties.telegram().allowedChatIds();
     }
 
@@ -54,7 +58,7 @@ public class CineSeekerrBot implements LongPollingSingleThreadUpdateConsumer {
             }
         } catch (RuntimeException e) {
             log.error("Unexpected error handling update for chat {}", chatId, e);
-            messenger.sendHtml(chatId, "❌ Errore inatteso, riprova. Se persiste guarda i log del bot.", null);
+            messenger.sendHtml(chatId, messages.get("error.unexpected"), null);
         }
     }
 

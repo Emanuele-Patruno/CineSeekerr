@@ -12,10 +12,13 @@ import com.cineseekerr.bot.client.QbittorrentClient;
 import com.cineseekerr.bot.client.TmdbClient;
 import com.cineseekerr.bot.config.CineSeekerrProperties;
 import com.cineseekerr.bot.model.Language;
+import com.cineseekerr.bot.model.MediaType;
+import com.cineseekerr.bot.model.ProwlarrRelease;
 import com.cineseekerr.bot.model.QbtTorrent;
 import com.cineseekerr.bot.model.Resolution;
 import com.cineseekerr.bot.model.SearchResult;
-import com.cineseekerr.bot.model.TmdbMovie;
+import com.cineseekerr.bot.model.TmdbSeason;
+import com.cineseekerr.bot.model.TmdbTitle;
 import com.cineseekerr.bot.parser.ReleaseNameParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,8 +29,14 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.cineseekerr.bot.bot.MessageFormatter.NUMBER_EMOJI;
 import static com.cineseekerr.bot.bot.MessageFormatter.esc;
@@ -35,9 +44,10 @@ import static com.cineseekerr.bot.bot.MessageFormatter.esc;
 /**
  * The conversation state machine, one instance shared by all chats.
  *
- * <p>Flow: free text (or {@code /cerca}) → TMDB candidates → Prowlarr search → dynamic
- * quality/audio/subtitle filters (each computed from the actual result set, steps with a
- * single option are skipped) → top-5 by seeders → send to qBittorrent.
+ * <p>Flow: free text (or {@code /cerca}) → TMDB candidates (movies and TV series mixed) →
+ * for TV, season choice → Prowlarr search → dynamic quality/audio/subtitle filters (each
+ * computed from the actual result set, steps with a single option are skipped) → top-5 by
+ * seeders → send to qBittorrent.
  *
  * <p>All interactive steps edit the same Telegram message; callback data carries only
  * short tokens (e.g. {@code quality:R1080P}), everything else lives in
@@ -60,6 +70,8 @@ public class ConversationHandler {
     private final ConversationStateStore stateStore;
     private final DownloadTracker downloadTracker;
     private final CineSeekerrProperties properties;
+    private final Messages messages;
+    private final MessageFormatter formatter;
 
     public ConversationHandler(TmdbClient tmdbClient,
                                ProwlarrClient prowlarrClient,
@@ -68,7 +80,9 @@ public class ConversationHandler {
                                TelegramMessenger messenger,
                                ConversationStateStore stateStore,
                                DownloadTracker downloadTracker,
-                               CineSeekerrProperties properties) {
+                               CineSeekerrProperties properties,
+                               Messages messages,
+                               MessageFormatter formatter) {
         this.tmdbClient = tmdbClient;
         this.prowlarrClient = prowlarrClient;
         this.qbittorrentClient = qbittorrentClient;
@@ -77,6 +91,8 @@ public class ConversationHandler {
         this.stateStore = stateStore;
         this.downloadTracker = downloadTracker;
         this.properties = properties;
+        this.messages = messages;
+        this.formatter = formatter;
     }
 
     public void onTextMessage(long chatId, String text) {
@@ -87,12 +103,19 @@ public class ConversationHandler {
         try {
             if (trimmed.startsWith("/")) {
                 handleCommand(chatId, trimmed);
+                return;
+            }
+            ConversationState state = stateStore.find(chatId).orElse(null);
+            if (state != null && state.step() == ConversationStep.AWAITING_MANUAL_SEASON) {
+                onManualSeasonEntered(chatId, state, trimmed);
+            } else if (state != null && state.step() == ConversationStep.AWAITING_MANUAL_EPISODE) {
+                onManualEpisodeEntered(chatId, state, trimmed);
             } else {
                 startSearch(chatId, trimmed);
             }
         } catch (ApiClientException e) {
             log.warn("External service error for chat {}: {}", chatId, e.getMessage(), e);
-            messenger.sendHtml(chatId, "⚠️ " + esc(e.getMessage()) + "\nRiprova più tardi.", null);
+            messenger.sendHtml(chatId, messages.get("error.generic", esc(e.getMessage())), null);
         }
     }
 
@@ -103,7 +126,7 @@ public class ConversationHandler {
         }
         if ("cancel".equals(data)) {
             stateStore.clear(chatId);
-            messenger.editHtml(chatId, messageId, "❌ Operazione annullata. Scrivimi un titolo quando vuoi.", null);
+            messenger.editHtml(chatId, messageId, messages.get("cancel.done"), null);
             return;
         }
 
@@ -111,24 +134,32 @@ public class ConversationHandler {
         String action = parts[0];
         String value = parts.length > 1 ? parts[1] : "";
 
-        // /stato's "stop download" buttons act on qBittorrent directly and don't belong
-        // to the movie-search conversation, so they work with no state on file.
+        // /stato's "stop download" buttons and a stalled-download notification's "retry"
+        // button act on qBittorrent directly and don't belong to the movie-search
+        // conversation, so they work with no state on file.
         if ("stopdl".equals(action)) {
             onStopDownload(chatId, messageId, value);
+            return;
+        }
+        if ("retrystalled".equals(action)) {
+            onRetryStalledDownload(chatId, messageId, value);
             return;
         }
 
         ConversationState state = stateStore.find(chatId).orElse(null);
         if (state == null) {
-            messenger.editHtml(chatId, messageId,
-                    "⌛ Sessione scaduta — scrivimi un nuovo titolo per ricominciare.", null);
+            messenger.editHtml(chatId, messageId, messages.get("session.expired"), null);
             return;
         }
 
         try {
             switch (action) {
                 case "movie" -> whenStep(state, ConversationStep.AWAITING_MOVIE_CHOICE,
-                        () -> onMovieChosen(chatId, state, parseIndex(value, state.candidates().size())));
+                        () -> onTitleChosen(chatId, state, parseIndex(value, state.candidates().size())));
+                case "season" -> whenStep(state, ConversationStep.AWAITING_SEASON_CHOICE,
+                        () -> onSeasonChosen(chatId, state, value));
+                case "episode" -> whenStep(state, ConversationStep.AWAITING_EPISODE_CHOICE,
+                        () -> onEpisodeChosen(chatId, state, value));
                 case "quality" -> whenStep(state, ConversationStep.AWAITING_QUALITY,
                         () -> onQualityChosen(chatId, state, value));
                 case "audio" -> whenStep(state, ConversationStep.AWAITING_AUDIO,
@@ -142,7 +173,7 @@ public class ConversationHandler {
         } catch (ApiClientException e) {
             log.warn("External service error for chat {}: {}", chatId, e.getMessage(), e);
             stateStore.clear(chatId);
-            messenger.editHtml(chatId, messageId, "⚠️ " + esc(e.getMessage()) + "\nRiprova più tardi.", null);
+            messenger.editHtml(chatId, messageId, messages.get("error.generic", esc(e.getMessage())), null);
         }
     }
 
@@ -158,34 +189,28 @@ public class ConversationHandler {
         String args = parts.length > 1 ? parts[1].strip() : "";
 
         switch (command) {
-            case "/start", "/help" -> messenger.sendHtml(chatId, helpText(), null);
-            case "/cerca" -> {
-                if (args.isEmpty()) {
-                    messenger.sendHtml(chatId, "Uso: <code>/cerca titolo del film</code>", null);
-                } else {
-                    startSearch(chatId, args);
-                }
-            }
-            case "/annulla" -> {
+            case "/start", "/help" -> messenger.sendHtml(chatId, messages.get("help"), null);
+            case "/cerca", "/search" -> searchOrUsage(chatId, args, "usage.cerca",
+                    () -> startSearch(chatId, args));
+            case "/film", "/movie" -> searchOrUsage(chatId, args, "usage.film",
+                    () -> startSearch(chatId, args, tmdbClient.searchMovies(args), "search.none.movie"));
+            case "/serie", "/tv" -> searchOrUsage(chatId, args, "usage.serie",
+                    () -> startSearch(chatId, args, tmdbClient.searchTv(args), "search.none.tv"));
+            case "/annulla", "/cancel" -> {
                 stateStore.clear(chatId);
-                messenger.sendHtml(chatId, "❌ Operazione annullata. Scrivimi un titolo quando vuoi.", null);
+                messenger.sendHtml(chatId, messages.get("cancel.done"), null);
             }
-            case "/stato" -> sendDownloadStatus(chatId);
-            default -> messenger.sendHtml(chatId,
-                    "Comando sconosciuto. Usa /help per l'elenco dei comandi.", null);
+            case "/stato", "/status" -> sendDownloadStatus(chatId);
+            default -> messenger.sendHtml(chatId, messages.get("command.unknown"), null);
         }
     }
 
-    private String helpText() {
-        return """
-                🍿 <b>CineSeekerr</b>
-                Scrivimi il titolo di un film e te lo metto su Plex.
-
-                <b>Comandi:</b>
-                /cerca &lt;titolo&gt; — cerca un film (o scrivi solo il titolo)
-                /stato — download in corso
-                /annulla — annulla l'operazione corrente
-                /help — questo messaggio""";
+    private void searchOrUsage(long chatId, String args, String usageKey, Runnable search) {
+        if (args.isEmpty()) {
+            messenger.sendHtml(chatId, messages.get(usageKey), null);
+        } else {
+            search.run();
+        }
     }
 
     /**
@@ -199,15 +224,16 @@ public class ConversationHandler {
                 .filter(t -> !t.isComplete())
                 .toList();
         if (active.isEmpty()) {
-            messenger.sendHtml(chatId, "Nessun download in corso.", null);
+            messenger.sendHtml(chatId, messages.get("status.none"), null);
             return;
         }
-        StringBuilder sb = new StringBuilder("📥 <b>Download in corso:</b>\n\n");
+        StringBuilder sb = new StringBuilder(messages.get("status.header")).append("\n\n");
         List<InlineKeyboardRow> rows = new ArrayList<>();
         for (QbtTorrent torrent : active) {
-            sb.append(MessageFormatter.torrentStatusLine(torrent)).append('\n');
+            sb.append(formatter.torrentStatusLine(torrent)).append('\n');
             rows.add(new InlineKeyboardRow(button(
-                    "❌ Ferma " + MessageFormatter.truncate(torrent.name(), 30), "stopdl:" + torrent.hash())));
+                    messages.get("status.stop.button", MessageFormatter.truncate(torrent.name(), 30)),
+                    "stopdl:" + torrent.hash())));
         }
         messenger.sendHtml(chatId, sb.toString(), keyboard(rows));
     }
@@ -215,37 +241,75 @@ public class ConversationHandler {
     private void onStopDownload(long chatId, int messageId, String hash) {
         try {
             qbittorrentClient.deleteTorrent(hash, true);
-            messenger.editHtml(chatId, messageId, "🗑 Download fermato e rimosso.", null);
+            messenger.editHtml(chatId, messageId, messages.get("status.stopped"), null);
             log.info("Chat {} stopped download {}", chatId, hash);
         } catch (ApiClientException e) {
             log.warn("Failed to stop download {} for chat {}: {}", hash, chatId, e.getMessage());
-            messenger.editHtml(chatId, messageId, "⚠️ " + esc(e.getMessage()) + "\nRiprova più tardi.", null);
+            messenger.editHtml(chatId, messageId, messages.get("error.generic", esc(e.getMessage())), null);
+        }
+    }
+
+    /**
+     * Stops a download {@link com.cineseekerr.bot.bot.download.DownloadWatcher} flagged as
+     * stalled and, if we still know which movie it was for, starts a fresh search so the
+     * user can pick a different release.
+     */
+    private void onRetryStalledDownload(long chatId, int messageId, String hash) {
+        try {
+            Optional<Map.Entry<String, DownloadTracker.PendingDownload>> match = qbittorrentClient
+                    .listTorrents(DownloadTracker.QBT_CATEGORY).stream()
+                    .filter(t -> hash.equals(t.hash()))
+                    .findFirst()
+                    .flatMap(t -> downloadTracker.findByTorrentName(t.name()));
+            if (match.isEmpty()) {
+                messenger.editHtml(chatId, messageId, messages.get("stalled.gone"), null);
+                return;
+            }
+            downloadTracker.remove(match.get().getKey());
+            qbittorrentClient.deleteTorrent(hash, true);
+            log.info("Chat {} stopped stalled download {}", chatId, hash);
+
+            DownloadTracker.PendingDownload download = match.get().getValue();
+            if (download.tmdbTitle() == null) {
+                messenger.editHtml(chatId, messageId, messages.get("stalled.stopped"), null);
+                return;
+            }
+            messenger.editHtml(chatId, messageId, messages.get("stalled.searching"), null);
+            retrySearch(chatId, download.tmdbTitle(), download.season(), download.episode());
+        } catch (ApiClientException e) {
+            log.warn("Failed to retry stalled download {} for chat {}: {}", hash, chatId, e.getMessage());
+            messenger.editHtml(chatId, messageId, messages.get("error.generic", esc(e.getMessage())), null);
         }
     }
 
     // ------------------------------------------------------------------ search flow
 
     private void startSearch(long chatId, String query) {
+        startSearch(chatId, query, tmdbClient.searchTitles(query), "search.none.query");
+    }
+
+    private void startSearch(long chatId, String query, List<TmdbTitle> results, String noneKey) {
         stateStore.clear(chatId);
-        List<TmdbMovie> candidates = tmdbClient.searchMovies(query).stream()
+        List<TmdbTitle> candidates = results.stream()
                 .limit(MAX_CANDIDATES)
                 .toList();
         if (candidates.isEmpty()) {
-            messenger.sendHtml(chatId,
-                    "😕 Nessun film trovato per «" + esc(query) + "». Prova con un altro titolo.", null);
+            messenger.sendHtml(chatId, messages.get(noneKey, esc(query)), null);
             return;
         }
 
         List<InlineKeyboardRow> rows = new ArrayList<>();
         for (int i = 0; i < candidates.size(); i++) {
+            TmdbTitle candidate = candidates.get(i);
             rows.add(new InlineKeyboardRow(button(
-                    NUMBER_EMOJI[i] + " " + MessageFormatter.truncate(MessageFormatter.movieLabel(candidates.get(i)), 34),
+                    NUMBER_EMOJI[i] + " " + MessageFormatter.icon(candidate) + " "
+                            + MessageFormatter.truncate(MessageFormatter.titleLabel(candidate), 32),
                     "movie:" + i)));
         }
         rows.add(cancelRow());
 
         Integer messageId = messenger.sendHtml(chatId,
-                MessageFormatter.candidatesText(candidates), keyboard(rows));
+                formatter.candidatesText(candidates), keyboard(rows));
 
         ConversationState state = new ConversationState();
         state.setStep(ConversationStep.AWAITING_MOVIE_CHOICE);
@@ -254,121 +318,320 @@ public class ConversationHandler {
         stateStore.save(chatId, state);
     }
 
-    private void onMovieChosen(long chatId, ConversationState state, int index) {
+    private void onTitleChosen(long chatId, ConversationState state, int index) {
         if (index < 0) {
             return;
         }
-        TmdbMovie movie = state.candidates().get(index);
-        state.setMovie(movie);
-        editFlowMessage(chatId, state,
-                "⏳ Cerco release di <b>" + esc(MessageFormatter.movieLabel(movie)) + "</b> sugli indexer…", null);
+        state.setTitle(state.candidates().get(index));
+        if (state.title().isTv()) {
+            showSeasonStep(chatId, state);
+        } else {
+            searchReleasesFor(chatId, state);
+        }
+    }
 
-        List<SearchResult> results = prowlarrClient.search(prowlarrQuery(movie)).stream()
+    /**
+     * Always shows the season list with a manual-override escape hatch, even when TMDB
+     * reports just one season: TMDB's season grouping can be wrong for some shows (e.g.
+     * multi-cour anime lumped into a single "Season 1"), so auto-picking the only season
+     * TMDB knows about would silently hide the ones it doesn't.
+     */
+    private void showSeasonStep(long chatId, ConversationState state) {
+        List<TmdbSeason> seasons = tmdbClient.seasons(state.title().id());
+        if (seasons.isEmpty()) {
+            stateStore.clear(chatId);
+            editFlowMessage(chatId, state,
+                    messages.get("seasons.none", esc(MessageFormatter.titleLabel(state.title()))), null);
+            return;
+        }
+        state.setSeasons(seasons);
+
+        List<InlineKeyboardRow> rows = bucketRows(seasons.stream()
+                .map(s -> button(messages.get("seasons.button", s.seasonNumber(), s.episodeCount()),
+                        "season:" + s.seasonNumber()))
+                .toList());
+        rows.add(new InlineKeyboardRow(button(messages.get("seasons.manual.button"), "season:manual")));
+        rows.add(cancelRow());
+
+        state.setStep(ConversationStep.AWAITING_SEASON_CHOICE);
+        saveAndEdit(chatId, state,
+                messages.get("seasons.prompt", esc(MessageFormatter.titleLabel(state.title()))), keyboard(rows));
+    }
+
+    private void onSeasonChosen(long chatId, ConversationState state, String value) {
+        if ("manual".equals(value)) {
+            state.setStep(ConversationStep.AWAITING_MANUAL_SEASON);
+            saveAndEdit(chatId, state, messages.get("seasons.manual.prompt"), cancelOnlyKeyboard());
+            return;
+        }
+        int season;
+        try {
+            season = Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return;
+        }
+        state.setSeason(season);
+        showEpisodeStep(chatId, state);
+    }
+
+    private void onManualSeasonEntered(long chatId, ConversationState state, String text) {
+        Integer season = parsePositiveInt(text);
+        if (season == null) {
+            messenger.sendHtml(chatId, messages.get("seasons.manual.invalid"), null);
+            return;
+        }
+        state.setSeason(season);
+        showEpisodeStep(chatId, state);
+    }
+
+    /** Telegram inline keyboards allow at most 100 buttons; 96 episodes + the two fixed rows fit. */
+    private static final int MAX_EPISODE_BUTTONS = 96;
+    private static final int EPISODES_PER_ROW = 8;
+
+    /**
+     * Numbered episode buttons are only offered when TMDB actually knows the episode
+     * count for this season; otherwise (including seasons entered manually, which TMDB
+     * never counted) the choice is just "whole season" or a manually typed episode number.
+     */
+    private void showEpisodeStep(long chatId, ConversationState state) {
+        int episodeCount = state.seasons().stream()
+                .filter(s -> s.seasonNumber() == state.season())
+                .findFirst()
+                .map(TmdbSeason::episodeCount)
+                .orElse(0);
+
+        List<InlineKeyboardRow> rows = new ArrayList<>();
+        rows.add(new InlineKeyboardRow(button(messages.get("episode.all.button"), "episode:all")));
+        if (episodeCount > 1) {
+            List<InlineKeyboardButton> episodeButtons = new ArrayList<>();
+            for (int ep = 1; ep <= Math.min(episodeCount, MAX_EPISODE_BUTTONS); ep++) {
+                episodeButtons.add(button(String.valueOf(ep), "episode:" + ep));
+            }
+            for (int i = 0; i < episodeButtons.size(); i += EPISODES_PER_ROW) {
+                rows.add(new InlineKeyboardRow(
+                        episodeButtons.subList(i, Math.min(i + EPISODES_PER_ROW, episodeButtons.size()))));
+            }
+        } else {
+            rows.add(new InlineKeyboardRow(button(messages.get("episode.manual.button"), "episode:manual")));
+        }
+        rows.add(cancelRow());
+
+        String label = MessageFormatter.titleLabel(state.title()) + seasonEpisodeSuffix(state);
+        state.setStep(ConversationStep.AWAITING_EPISODE_CHOICE);
+        saveAndEdit(chatId, state, messages.get("episode.prompt", esc(label)), keyboard(rows));
+    }
+
+    private void onEpisodeChosen(long chatId, ConversationState state, String value) {
+        if ("manual".equals(value)) {
+            state.setStep(ConversationStep.AWAITING_MANUAL_EPISODE);
+            saveAndEdit(chatId, state, messages.get("episode.manual.prompt"), cancelOnlyKeyboard());
+            return;
+        }
+        if ("all".equals(value)) {
+            state.setEpisode(null);
+        } else {
+            Integer episode = parsePositiveInt(value);
+            if (episode == null) {
+                return;
+            }
+            state.setEpisode(episode);
+        }
+        searchReleasesFor(chatId, state);
+    }
+
+    private void onManualEpisodeEntered(long chatId, ConversationState state, String text) {
+        Integer episode = parsePositiveInt(text);
+        if (episode == null) {
+            messenger.sendHtml(chatId, messages.get("episode.manual.invalid"), null);
+            return;
+        }
+        state.setEpisode(episode);
+        searchReleasesFor(chatId, state);
+    }
+
+    private static Integer parsePositiveInt(String text) {
+        try {
+            int value = Integer.parseInt(text.strip());
+            return value >= 1 ? value : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** {@code " — Season N — Episode M"} recap suffix; empty for movies or before a season is chosen. */
+    private String seasonEpisodeSuffix(ConversationState state) {
+        if (!state.title().isTv() || state.season() == null) {
+            return "";
+        }
+        String suffix = " — " + messages.get("recap.season", state.season());
+        if (state.episode() != null) {
+            suffix += " — " + messages.get("recap.episode", state.episode());
+        }
+        return suffix;
+    }
+
+    /**
+     * Starts a brand new search for a title we already know unambiguously — used when a
+     * stalled-download notification's "retry" button is pressed, long after the original
+     * search conversation is gone.
+     */
+    public void retrySearch(long chatId, TmdbTitle title, Integer season, Integer episode) {
+        stateStore.clear(chatId);
+        ConversationState state = new ConversationState();
+        state.setTitle(title);
+        state.setSeason(season);
+        state.setEpisode(episode);
+        searchReleasesFor(chatId, state);
+    }
+
+    private void searchReleasesFor(long chatId, ConversationState state) {
+        TmdbTitle title = state.title();
+        boolean tv = title.isTv();
+        String label = MessageFormatter.titleLabel(title) + seasonEpisodeSuffix(state);
+        editFlowMessage(chatId, state, messages.get("search.searching", esc(label)), null);
+
+        List<SearchResult> results = searchIndexers(title).stream()
                 .map(release -> new SearchResult(release, parser.parse(release.title())))
+                // for TV: either the exact episode, or only full packs of the chosen season
+                .filter(result -> !tv || state.season() == null
+                        || (state.episode() != null
+                                ? result.parsed().isEpisode(state.season(), state.episode())
+                                : result.parsed().isSeasonPack(state.season())))
                 .sorted(Comparator.comparingInt(SearchResult::seeders).reversed())
                 .toList();
 
         if (results.isEmpty()) {
             stateStore.clear(chatId);
-            editFlowMessage(chatId, state, "😕 Nessuna release trovata per <b>"
-                    + esc(MessageFormatter.movieLabel(movie)) + "</b>.", null);
+            String noneKey = tv && state.season() != null && state.episode() == null
+                    ? "search.none.pack"
+                    : "search.none.releases";
+            editFlowMessage(chatId, state, messages.get(noneKey, esc(label)), null);
             return;
         }
         state.setFiltered(results);
-        showQualityStep(chatId, state);
+        showAudioStep(chatId, state);
     }
 
     /**
-     * Indexers respond far better to the original (usually English) title than to the
-     * localized TMDB one, so that is what we search for — the localized title is only
-     * used for display and for the final Plex folder name.
+     * Most scene releases use the original (usually English) title, but Italian indexers
+     * often name releases with the localized one ("La rivincita delle bionde" instead of
+     * "Legally Blonde") — so when the two differ, both are searched and the results are
+     * merged, deduplicated by guid.
      */
-    private String prowlarrQuery(TmdbMovie movie) {
-        String title = movie.originalTitle() != null && !movie.originalTitle().isBlank()
-                ? movie.originalTitle()
-                : movie.title();
-        return movie.year() == null ? title : title + " " + movie.year();
+    private List<ProwlarrRelease> searchIndexers(TmdbTitle title) {
+        MediaType type = title.isTv() ? MediaType.TV : MediaType.MOVIE;
+        List<ProwlarrRelease> results = new ArrayList<>(
+                prowlarrClient.search(prowlarrQuery(title, originalName(title)), type));
+        if (!originalName(title).equalsIgnoreCase(title.title())) {
+            Set<String> seen = results.stream()
+                    .map(ConversationHandler::dedupKey)
+                    .collect(Collectors.toCollection(HashSet::new));
+            prowlarrClient.search(prowlarrQuery(title, title.title()), type).stream()
+                    .filter(release -> seen.add(dedupKey(release)))
+                    .forEach(results::add);
+        }
+        return results;
+    }
+
+    private static String originalName(TmdbTitle title) {
+        return title.originalTitle() != null && !title.originalTitle().isBlank()
+                ? title.originalTitle()
+                : title.title();
+    }
+
+    /** The same release can come back from both queries; the guid identifies it. */
+    private static String dedupKey(ProwlarrRelease release) {
+        return release.guid() != null ? release.guid() : release.title() + "@" + release.indexer();
+    }
+
+    /**
+     * For movies the year narrows the search; for TV it is omitted, season packs are
+     * tagged with the season rather than the first-air year.
+     */
+    private String prowlarrQuery(TmdbTitle title, String name) {
+        return title.isTv() || title.year() == null ? name : name + " " + title.year();
     }
 
     // ------------------------------------------------------------------ filter steps
 
-    private void showQualityStep(long chatId, ConversationState state) {
-        Map<Resolution, Long> buckets = ReleaseFilters.qualityBuckets(state.filtered());
-        if (buckets.size() <= 1) {
-            state.setQualityFilter(null);
-            showAudioStep(chatId, state);
-            return;
-        }
-        List<InlineKeyboardRow> rows = bucketRows(buckets.entrySet().stream()
-                .map(e -> button(MessageFormatter.qualityLabel(e.getKey()) + " (" + e.getValue() + ")",
-                        "quality:" + e.getKey().name()))
-                .toList());
-        rows.add(new InlineKeyboardRow(button("Qualsiasi (" + state.filtered().size() + ")", "quality:" + ANY)));
-        rows.add(cancelRow());
+    // Step order: audio first (the deciding factor for an Italian-speaking household),
+    // then subtitles, then quality last. The three steps share the same shape (bucket
+    // buttons + "any" + cancel, skip when there is nothing to choose), so each one just
+    // parameterizes showFilterStep.
 
-        state.setStep(ConversationStep.AWAITING_QUALITY);
-        saveAndEdit(chatId, state,
-                MessageFormatter.stepHeader(state) + "📺 <b>Scegli la qualità:</b>", keyboard(rows));
+    private void showQualityStep(long chatId, ConversationState state) {
+        showFilterStep(chatId, state, ReleaseFilters.qualityBuckets(state.filtered()), 2,
+                formatter::qualityLabel, "quality", "option.any", "step.quality",
+                ConversationStep.AWAITING_QUALITY,
+                state::setQualityFilter, () -> showShortlist(chatId, state));
     }
 
     private void onQualityChosen(long chatId, ConversationState state, String value) {
-        Resolution resolution = ANY.equals(value) ? null : Resolution.valueOf(value);
+        Resolution resolution = parseFilter(value, Resolution.class);
         state.setQualityFilter(resolution);
         state.setFiltered(ReleaseFilters.byQuality(state.filtered(), resolution));
-        showAudioStep(chatId, state);
+        showShortlist(chatId, state);
     }
 
     private void showAudioStep(long chatId, ConversationState state) {
-        Map<Language, Long> buckets = ReleaseFilters.audioBuckets(state.filtered());
-        if (buckets.size() <= 1) {
-            state.setAudioFilter(null);
-            showSubtitleStep(chatId, state);
-            return;
-        }
-        List<InlineKeyboardRow> rows = bucketRows(buckets.entrySet().stream()
-                .map(e -> button(e.getKey().label() + " (" + e.getValue() + ")",
-                        "audio:" + e.getKey().name()))
-                .toList());
-        rows.add(new InlineKeyboardRow(button("Qualsiasi (" + state.filtered().size() + ")", "audio:" + ANY)));
-        rows.add(cancelRow());
-
-        state.setStep(ConversationStep.AWAITING_AUDIO);
-        saveAndEdit(chatId, state,
-                MessageFormatter.stepHeader(state) + "🔊 <b>Scegli l'audio:</b>\n"
-                        + "<i>ITA include anche le release MULTI/DUAL</i>", keyboard(rows));
+        showFilterStep(chatId, state, ReleaseFilters.audioBuckets(state.filtered()), 2,
+                Language::label, "audio", "option.any", "step.audio",
+                ConversationStep.AWAITING_AUDIO,
+                state::setAudioFilter, () -> showSubtitleStep(chatId, state));
     }
 
     private void onAudioChosen(long chatId, ConversationState state, String value) {
-        Language language = ANY.equals(value) ? null : Language.valueOf(value);
+        Language language = parseFilter(value, Language.class);
         state.setAudioFilter(language);
         state.setFiltered(ReleaseFilters.byAudio(state.filtered(), language));
         showSubtitleStep(chatId, state);
     }
 
     private void showSubtitleStep(long chatId, ConversationState state) {
-        Map<Language, Long> buckets = ReleaseFilters.subtitleBuckets(state.filtered());
-        if (buckets.isEmpty()) {
-            state.setSubtitleFilter(null);
-            showShortlist(chatId, state);
-            return;
-        }
-        List<InlineKeyboardRow> rows = bucketRows(buckets.entrySet().stream()
-                .map(e -> button(MessageFormatter.subtitleLabel(e.getKey()) + " (" + e.getValue() + ")",
-                        "subs:" + e.getKey().name()))
-                .toList());
-        rows.add(new InlineKeyboardRow(button("Indifferente (" + state.filtered().size() + ")", "subs:" + ANY)));
-        rows.add(cancelRow());
-
-        state.setStep(ConversationStep.AWAITING_SUBTITLES);
-        saveAndEdit(chatId, state,
-                MessageFormatter.stepHeader(state) + "💬 <b>Sottotitoli:</b>", keyboard(rows));
+        showFilterStep(chatId, state, ReleaseFilters.subtitleBuckets(state.filtered()), 1,
+                MessageFormatter::subtitleLabel, "subs", "option.subs.any", "step.subtitles",
+                ConversationStep.AWAITING_SUBTITLES,
+                state::setSubtitleFilter, () -> showQualityStep(chatId, state));
     }
 
     private void onSubtitlesChosen(long chatId, ConversationState state, String value) {
-        Language language = ANY.equals(value) ? null : Language.valueOf(value);
+        Language language = parseFilter(value, Language.class);
         state.setSubtitleFilter(language);
         state.setFiltered(ReleaseFilters.bySubtitle(state.filtered(), language));
-        showShortlist(chatId, state);
+        showQualityStep(chatId, state);
+    }
+
+    /**
+     * Shows one filter step, or — when the buckets offer fewer than {@code minOptions}
+     * real choices — clears that filter and jumps straight to {@code skipTo}. Audio and
+     * quality need at least 2 buckets to be worth asking; subtitles are shown even with a
+     * single bucket, because "none" (no subtitle tag) is itself a meaningful alternative.
+     */
+    private <T extends Enum<T>> void showFilterStep(long chatId, ConversationState state,
+                                                    Map<T, Long> buckets, int minOptions,
+                                                    Function<T, String> label, String action,
+                                                    String anyKey, String promptKey,
+                                                    ConversationStep step,
+                                                    Consumer<T> setFilter, Runnable skipTo) {
+        if (buckets.size() < minOptions) {
+            setFilter.accept(null);
+            skipTo.run();
+            return;
+        }
+        List<InlineKeyboardRow> rows = bucketRows(buckets.entrySet().stream()
+                .map(e -> button(label.apply(e.getKey()) + " (" + e.getValue() + ")",
+                        action + ":" + e.getKey().name()))
+                .toList());
+        rows.add(new InlineKeyboardRow(button(messages.get(anyKey, state.filtered().size()), action + ":" + ANY)));
+        rows.add(cancelRow());
+
+        state.setStep(step);
+        saveAndEdit(chatId, state,
+                formatter.stepHeader(state) + messages.get(promptKey), keyboard(rows));
+    }
+
+    private static <T extends Enum<T>> T parseFilter(String value, Class<T> type) {
+        return ANY.equals(value) ? null : Enum.valueOf(type, value);
     }
 
     // ------------------------------------------------------------------ shortlist & download
@@ -387,7 +650,7 @@ public class ConversationHandler {
         rows.add(cancelRow());
 
         state.setStep(ConversationStep.AWAITING_RELEASE_CHOICE);
-        saveAndEdit(chatId, state, MessageFormatter.shortlistText(state), keyboard(rows));
+        saveAndEdit(chatId, state, formatter.shortlistText(state), keyboard(rows));
     }
 
     private void onReleaseChosen(long chatId, ConversationState state, int index) {
@@ -395,20 +658,34 @@ public class ConversationHandler {
             return;
         }
         SearchResult chosen = state.shortlist().get(index);
-        String plexName = PlexRenameService.plexName(state.movie().title(), state.movie().year());
+        TmdbTitle title = state.title();
+        boolean tv = title.isTv();
+        String plexFolder = PlexRenameService.plexName(title.title(), title.year());
+        // movies land straight in the movie root; each show gets its own folder under the
+        // TV root: season packs get a "Season NN" rename on completion, single episodes
+        // are saved directly into the season folder and keep their scene name
+        String savePath = properties.media().rootFolder();
+        String plexName = plexFolder + seasonEpisodeSuffix(state);
+        if (tv) {
+            savePath = properties.media().tvRootFolder() + "/" + plexFolder;
+            if (state.season() != null && state.episode() != null) {
+                savePath += "/" + PlexRenameService.seasonFolder(state.season());
+            }
+        }
 
         qbittorrentClient.addTorrent(
                 chosen.release().preferredDownloadUrl(),
-                properties.media().rootFolder(),
+                savePath,
                 DownloadTracker.QBT_CATEGORY);
-        downloadTracker.track(chatId, chosen.release().title(), plexName);
+        downloadTracker.track(chatId, chosen.release().title(), plexName, title,
+                tv ? state.season() : null, tv ? state.episode() : null);
         stateStore.clear(chatId);
 
         editFlowMessage(chatId, state,
-                "✅ Torrent inviato a qBittorrent!\n\n"
-                        + "🎬 <b>" + esc(plexName) + "</b>\n"
+                messages.get("download.sent.title") + "\n\n"
+                        + MessageFormatter.icon(title) + " <b>" + esc(plexName) + "</b>\n"
                         + "<code>" + esc(MessageFormatter.truncate(chosen.release().title(), 80)) + "</code>\n\n"
-                        + "Ti avviso appena è pronto su Plex. Usa /stato per seguire il download.", null);
+                        + messages.get("download.sent.footer"), null);
         log.info("Chat {} queued download '{}' as '{}'", chatId, chosen.release().title(), plexName);
     }
 
@@ -448,8 +725,12 @@ public class ConversationHandler {
         return InlineKeyboardButton.builder().text(text).callbackData(callbackData).build();
     }
 
-    private static InlineKeyboardRow cancelRow() {
-        return new InlineKeyboardRow(button("❌ Annulla", "cancel"));
+    private InlineKeyboardRow cancelRow() {
+        return new InlineKeyboardRow(button(messages.get("cancel.button"), "cancel"));
+    }
+
+    private InlineKeyboardMarkup cancelOnlyKeyboard() {
+        return keyboard(List.of(cancelRow()));
     }
 
     /** Lays buttons out three per row. */

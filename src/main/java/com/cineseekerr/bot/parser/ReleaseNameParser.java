@@ -7,6 +7,7 @@ import com.cineseekerr.bot.model.Resolution;
 import com.cineseekerr.bot.model.VideoCodec;
 
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,7 +45,8 @@ public final class ReleaseNameParser {
 
     /** Real languages — valid for both audio and subtitles. */
     private static final String LANG_ALT =
-            "ITA(?:LIAN)?|ENG(?:LISH)?|FRENCH|FRE|FRA|GERMAN|GER|SPANISH|SPA|ESP";
+            "ITA(?:LIAN)?|ENG(?:LISH)?|FRENCH|FRE|FRA|GERMAN|GER|SPANISH|SPA|ESP"
+                    + "|JAP(?:ANESE)?|JPN|KOR(?:EAN)?|RUS(?:SIAN)?|POR(?:TUGUESE)?";
     /** Audio-only pseudo-tags in addition to real languages. */
     private static final String AUDIO_ALT = LANG_ALT + "|MULTI(?:LANG)?|DUAL";
 
@@ -68,6 +70,19 @@ public final class ReleaseNameParser {
             entry("\\b(X ?264|H ?264|AVC)\\b", VideoCodec.X264),
             entry("\\b(XVID|DIVX)\\b", VideoCodec.XVID),
             entry("\\bAV1\\b", VideoCodec.AV1));
+
+    /**
+     * Season/episode patterns, most specific first. An episode <em>range</em>
+     * ({@code S01E01-E10}) counts as a pack, not an episode.
+     */
+    private static final Pattern SEASON_EPISODE_RANGE =
+            Pattern.compile("\\bS(\\d{1,2})\\s?E(\\d{1,3})\\s?-\\s?E?(\\d{1,3})\\b");
+    private static final Pattern SEASON_EPISODE = Pattern.compile("\\bS(\\d{1,2})\\s?E(\\d{1,3})\\b");
+    private static final Pattern SEASON_RANGE = Pattern.compile("\\bS(\\d{1,2})\\s?-\\s?S(\\d{1,2})\\b");
+    private static final Pattern SEASON_X_EPISODE = Pattern.compile("\\b(\\d{1,2})X(\\d{2,3})\\b");
+    private static final Pattern SEASON_WORD = Pattern.compile(
+            "\\b(?:STAGION[EI]|SEASONS?)\\s?(\\d{1,2})(?:\\s?-\\s?(\\d{1,2}))?\\b");
+    private static final Pattern SEASON_ONLY = Pattern.compile("\\bS(\\d{1,2})\\b");
 
     /** Ordered: first match wins, most specific patterns first (rips before their medium). */
     private static final List<Map.Entry<Pattern, ReleaseSource>> SOURCES = List.of(
@@ -96,6 +111,8 @@ public final class ReleaseNameParser {
         boolean subtitled = !subtitleLanguages.isEmpty() || genericSubs.find();
         withoutSubs = genericSubs.reset().replaceAll(" ");
 
+        SeasonEpisode seasonEpisode = detectSeasonEpisode(withoutSubs);
+
         return new ParsedRelease(
                 rawName,
                 detectResolution(withoutSubs),
@@ -103,7 +120,58 @@ public final class ReleaseNameParser {
                 subtitleLanguages,
                 subtitled,
                 detectFirst(CODECS, withoutSubs, VideoCodec.UNKNOWN),
-                detectFirst(SOURCES, withoutSubs, ReleaseSource.UNKNOWN));
+                detectFirst(SOURCES, withoutSubs, ReleaseSource.UNKNOWN),
+                seasonEpisode.seasons(),
+                seasonEpisode.episode());
+    }
+
+    private record SeasonEpisode(Set<Integer> seasons, Integer episode) {
+        static final SeasonEpisode NONE = new SeasonEpisode(Set.of(), null);
+    }
+
+    private static SeasonEpisode detectSeasonEpisode(String text) {
+        Matcher matcher = SEASON_EPISODE_RANGE.matcher(text);
+        if (matcher.find()) {
+            // an episode range (S01E01-E10) is effectively a pack of that season
+            return new SeasonEpisode(Set.of(Integer.parseInt(matcher.group(1))), null);
+        }
+        matcher = SEASON_EPISODE.matcher(text);
+        if (matcher.find()) {
+            return new SeasonEpisode(Set.of(Integer.parseInt(matcher.group(1))),
+                    Integer.parseInt(matcher.group(2)));
+        }
+        matcher = SEASON_RANGE.matcher(text);
+        if (matcher.find()) {
+            return new SeasonEpisode(
+                    range(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2))), null);
+        }
+        matcher = SEASON_WORD.matcher(text);
+        if (matcher.find()) {
+            int from = Integer.parseInt(matcher.group(1));
+            int to = matcher.group(2) == null ? from : Integer.parseInt(matcher.group(2));
+            return new SeasonEpisode(range(from, to), null);
+        }
+        matcher = SEASON_X_EPISODE.matcher(text);
+        if (matcher.find()) {
+            return new SeasonEpisode(Set.of(Integer.parseInt(matcher.group(1))),
+                    Integer.parseInt(matcher.group(2)));
+        }
+        matcher = SEASON_ONLY.matcher(text);
+        if (matcher.find()) {
+            return new SeasonEpisode(Set.of(Integer.parseInt(matcher.group(1))), null);
+        }
+        return SeasonEpisode.NONE;
+    }
+
+    private static Set<Integer> range(int from, int to) {
+        if (to < from) {
+            return Set.of(from);
+        }
+        Set<Integer> seasons = new HashSet<>();
+        for (int i = from; i <= to; i++) {
+            seasons.add(i);
+        }
+        return seasons;
     }
 
     /** Uppercases and replaces scene separators (dots, brackets, ...) with spaces. */
@@ -165,6 +233,10 @@ public final class ReleaseNameParser {
             case "FRENCH", "FRE", "FRA" -> Language.FRE;
             case "GERMAN", "GER" -> Language.GER;
             case "SPANISH", "SPA", "ESP" -> Language.SPA;
+            case "JAP", "JAPANESE", "JPN" -> Language.JAP;
+            case "KOR", "KOREAN" -> Language.KOR;
+            case "RUS", "RUSSIAN" -> Language.RUS;
+            case "POR", "PORTUGUESE" -> Language.POR;
             case "MULTI", "MULTILANG" -> Language.MULTI;
             case "DUAL" -> Language.DUAL;
             default -> throw new IllegalStateException("Unmapped language token: " + token);

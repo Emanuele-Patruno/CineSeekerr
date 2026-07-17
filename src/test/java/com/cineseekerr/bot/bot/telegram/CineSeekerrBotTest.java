@@ -1,6 +1,7 @@
 package com.cineseekerr.bot.bot.telegram;
 
 import com.cineseekerr.bot.bot.ConversationHandler;
+import com.cineseekerr.bot.bot.Messages;
 import com.cineseekerr.bot.config.CineSeekerrProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,8 +35,8 @@ class CineSeekerrBotTest {
     void setUp() {
         CineSeekerrProperties properties = new CineSeekerrProperties(
                 new CineSeekerrProperties.Telegram("token", Set.of(ALLOWED_CHAT)),
-                null, null, null, null);
-        bot = new CineSeekerrBot(handler, messenger, properties);
+                null, null, null, null, "it");
+        bot = new CineSeekerrBot(handler, messenger, properties, new Messages(properties));
     }
 
     private static Update textUpdate(long chatId, String text) {

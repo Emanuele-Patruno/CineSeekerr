@@ -14,7 +14,15 @@ public record CineSeekerrProperties(
         Tmdb tmdb,
         Prowlarr prowlarr,
         Qbittorrent qbittorrent,
-        Media media) {
+        Media media,
+        /** UI language of the bot's Telegram messages ({@code en} or {@code it}). */
+        String language) {
+
+    public CineSeekerrProperties {
+        if (language == null || language.isBlank()) {
+            language = "en";
+        }
+    }
 
     /**
      * @param botToken       token issued by BotFather
@@ -47,9 +55,11 @@ public record CineSeekerrProperties(
     }
 
     /**
-     * @param rootFolder save path handed to qBittorrent; completed downloads are renamed
-     *                   to {@code Title (Year)} inside it so Plex matches them
+     * @param rootFolder   save path handed to qBittorrent for movies; completed downloads
+     *                     are renamed to {@code Title (Year)} inside it so Plex matches them
+     * @param tvRootFolder save path for TV series; each season pack is saved under
+     *                     {@code Show (Year)/} and renamed to {@code Season NN} inside it
      */
-    public record Media(String rootFolder) {
+    public record Media(String rootFolder, String tvRootFolder) {
     }
 }

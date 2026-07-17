@@ -317,6 +317,88 @@ class ReleaseNameParserTest {
     }
 
     @Nested
+    class ExtendedLanguages {
+
+        @Test
+        void animeWithJapaneseAudioAndItalianSubs() {
+            ParsedRelease release = parse("Attack.on.Titan.S01.JAP.SUB.iTA.1080p.WEB-DL");
+            assertThat(release.audioLanguages()).containsExactly(Language.JAP);
+            assertThat(release.subtitleLanguages()).containsExactly(Language.ITA);
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+                "Parasite.2019.KOREAN.1080p.BluRay,      KOR",
+                "Brother.1997.RUSSIAN.720p.WEB-DL,       RUS",
+                "City.of.God.2002.PORTUGUESE.1080p,      POR",
+                "Your.Name.2016.JPN.1080p.BluRay,        JAP",
+        })
+        void detectsNewLanguageTags(String name, Language expected) {
+            assertThat(parse(name).audioLanguages()).contains(expected);
+        }
+    }
+
+    @Nested
+    class SeasonEpisodeDetection {
+
+        @ParameterizedTest
+        @CsvSource({
+                "Breaking.Bad.S01.iTA.ENG.1080p.BDMux-GRP,          1",
+                "The.Office.Stagione.3.COMPLETA.iTA.DLMux,          3",
+                "Dark.Season.2.MULTI.1080p.WEB-DL,                  2",
+                "Fargo.S05E01-E10.iTA.ENG.1080p.WEBMux,             5",
+        })
+        void detectsSeasonPacks(String name, int season) {
+            ParsedRelease release = parse(name);
+            assertThat(release.isSeasonPack(season)).isTrue();
+            assertThat(release.episode()).isNull();
+        }
+
+        @Test
+        void singleEpisodeIsNotASeasonPack() {
+            ParsedRelease release = parse("Breaking.Bad.S01E05.iTA.1080p.WEB-DL");
+            assertThat(release.seasons()).containsExactly(1);
+            assertThat(release.episode()).isEqualTo(5);
+            assertThat(release.isSeasonPack(1)).isFalse();
+        }
+
+        @Test
+        void xStyleEpisodeIsDetected() {
+            ParsedRelease release = parse("Lost.4x08.iTA.HDTV.XviD");
+            assertThat(release.seasons()).containsExactly(4);
+            assertThat(release.episode()).isEqualTo(8);
+        }
+
+        @Test
+        void seasonRangeCoversAllSeasonsInBetween() {
+            ParsedRelease release = parse("The.Wire.S01-S05.COMPLETE.1080p.BluRay");
+            assertThat(release.seasons()).containsExactlyInAnyOrder(1, 2, 3, 4, 5);
+            assertThat(release.isSeasonPack(3)).isTrue();
+        }
+
+        @Test
+        void italianSeasonRangeIsDetected() {
+            ParsedRelease release = parse("Gomorra.Stagioni.1-4.iTA.1080p.WEB-DL");
+            assertThat(release.seasons()).containsExactlyInAnyOrder(1, 2, 3, 4);
+        }
+
+        @Test
+        void moviesCarryNoSeasonInformation() {
+            ParsedRelease release = parse("Oppenheimer.2023.1080p.BluRay.x264-VETO");
+            assertThat(release.seasons()).isEmpty();
+            assertThat(release.episode()).isNull();
+            assertThat(release.isSeasonPack(1)).isFalse();
+        }
+
+        @Test
+        void videoDimensionsAreNotMistakenForSeasonEpisode() {
+            ParsedRelease release = parse("Some.Documentary.2020.1920x1080.WEB-DL");
+            assertThat(release.seasons()).isEmpty();
+            assertThat(release.episode()).isNull();
+        }
+    }
+
+    @Nested
     class EdgeCases {
 
         @ParameterizedTest

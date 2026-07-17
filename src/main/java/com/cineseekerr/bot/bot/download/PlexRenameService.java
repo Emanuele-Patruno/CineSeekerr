@@ -76,6 +76,57 @@ public class PlexRenameService {
         }
     }
 
+    /**
+     * Renames a completed season pack to Plex's {@code Season NN} layout. The torrent is
+     * already saved under the show's own folder ({@code .../Serie TV/Show (Year)/}), so
+     * only the pack's root folder needs renaming; episode files keep their scene names,
+     * which carry the {@code SxxEyy} tags Plex matches episodes with.
+     *
+     * @return {@code true} if the layout now matches what Plex expects
+     */
+    public boolean renameSeasonForPlex(String hash, int season) {
+        String seasonFolder = seasonFolder(season);
+        try {
+            List<QbtTorrentFile> files = qbittorrentClient.listFiles(hash);
+            if (files.isEmpty()) {
+                log.warn("Torrent {} reports no files, skipping rename", hash);
+                return false;
+            }
+
+            String firstPath = files.getFirst().name();
+            int slash = firstPath.indexOf('/');
+            if (slash > 0) {
+                String root = firstPath.substring(0, slash);
+                boolean commonRoot = files.stream().allMatch(f -> f.name().startsWith(root + "/"));
+                if (!commonRoot) {
+                    log.warn("Torrent {} has no single root folder, skipping rename", hash);
+                    return false;
+                }
+                if (root.equals(seasonFolder)) {
+                    return true;
+                }
+                qbittorrentClient.renameFolder(hash, root, seasonFolder);
+                log.info("Renamed torrent {} folder '{}' -> '{}'", hash, root, seasonFolder);
+                return true;
+            }
+
+            // loose files (no root folder): move them into the season folder one by one
+            for (QbtTorrentFile file : files) {
+                qbittorrentClient.renameFile(hash, file.name(), seasonFolder + "/" + file.name());
+            }
+            log.info("Moved {} loose file(s) of torrent {} into '{}'", files.size(), hash, seasonFolder);
+            return true;
+        } catch (ApiClientException e) {
+            log.warn("Season rename of torrent {} failed: {}", hash, e.getMessage());
+            return false;
+        }
+    }
+
+    /** Plex's season folder convention, e.g. {@code Season 02}. */
+    public static String seasonFolder(int season) {
+        return String.format("Season %02d", season);
+    }
+
     /** Builds the Plex folder name {@code Title (Year)}, stripped of illegal filename chars. */
     public static String plexName(String title, Integer year) {
         String sanitized = title
