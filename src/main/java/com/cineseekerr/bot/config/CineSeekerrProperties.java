@@ -22,6 +22,11 @@ public record CineSeekerrProperties(
         if (language == null || language.isBlank()) {
             language = "en";
         }
+        // TMDB_LANGUAGE follows BOT_LANGUAGE unless the user overrides it explicitly,
+        // so an English-configured bot doesn't show Italian titles and plots by default.
+        if (tmdb != null && (tmdb.language() == null || tmdb.language().isBlank())) {
+            tmdb = new Tmdb(tmdb.apiKey(), tmdb.baseUrl(), "it".equals(language) ? "it-IT" : "en-US");
+        }
     }
 
     /**
@@ -38,14 +43,11 @@ public record CineSeekerrProperties(
     /**
      * @param apiKey   either a TMDB v3 API key or a v4 API Read Access Token (JWT);
      *                 the client auto-detects which one it is
-     * @param language language for titles and overviews, e.g. {@code it-IT}
+     * @param language language for titles and overviews, e.g. {@code it-IT}; when blank,
+     *                 {@link CineSeekerrProperties}'s compact constructor derives it from
+     *                 the bot's own UI language instead of a fixed default
      */
     public record Tmdb(String apiKey, String baseUrl, String language) {
-        public Tmdb {
-            if (language == null || language.isBlank()) {
-                language = "it-IT";
-            }
-        }
     }
 
     public record Prowlarr(String baseUrl, String apiKey) {

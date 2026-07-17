@@ -21,6 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "cineseekerr.qbittorrent.base-url=http://localhost:8080",
         "cineseekerr.qbittorrent.username=admin",
         "cineseekerr.qbittorrent.password=dummy",
+        "cineseekerr.media.root-folder=/media/Movies",
+        "cineseekerr.media.tv-root-folder=/media/TV",
         "cineseekerr.download.state-file=target/test-data/pending-downloads.json",
 })
 class CineSeekerrBotApplicationTests {
@@ -41,8 +43,10 @@ class CineSeekerrBotApplicationTests {
     void contextLoadsAndBindsProperties() {
         assertThat(properties.telegram().allowedChatIds())
                 .containsExactlyInAnyOrder(123456789L, 987654321L);
-        assertThat(properties.tmdb().language()).isEqualTo("it-IT");
-        assertThat(properties.media().rootFolder()).isEqualTo("/volume1/media/Film");
+        // no cineseekerr.language override above -> bot language defaults to "en",
+        // so the TMDB language derived from it is "en-US"
+        assertThat(properties.tmdb().language()).isEqualTo("en-US");
+        assertThat(properties.media().rootFolder()).isEqualTo("/media/Movies");
         assertThat(tmdbClient).isNotNull();
         assertThat(prowlarrClient).isNotNull();
         assertThat(qbittorrentClient).isNotNull();

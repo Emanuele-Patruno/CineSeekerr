@@ -128,7 +128,7 @@ Everything is configured through environment variables:
 | `TELEGRAM_BOT_TOKEN` | ✅ | — | Bot token from BotFather |
 | `TELEGRAM_ALLOWED_CHAT_IDS` | ✅ | — | Comma-separated whitelist of chat IDs; all other chats are ignored |
 | `TMDB_API_KEY` | ✅ | — | TMDB v3 API key **or** v4 Read Access Token |
-| `TMDB_LANGUAGE` | | `it-IT` | Language for titles and plots shown in chat |
+| `TMDB_LANGUAGE` | | follows `BOT_LANGUAGE` | Language for titles and plots shown in chat, e.g. `it-IT`; set explicitly to decouple it from the bot's own UI language |
 | `TMDB_BASE_URL` | | `https://api.themoviedb.org/3` | Override for proxies |
 | `PROWLARR_URL` | ✅ | — | e.g. `http://prowlarr:9696` (container name on the shared network) |
 | `PROWLARR_API_KEY` | ✅ | — | Prowlarr API key |

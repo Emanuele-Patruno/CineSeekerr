@@ -17,6 +17,9 @@ services:
     container_name: cineseekerr
     restart: unless-stopped
     environment:
+      # Language of the bot's Telegram messages: "en" (default) or "it".
+      BOT_LANGUAGE: "en"
+
       # --- Telegram ---
       # Token from @BotFather
       TELEGRAM_BOT_TOKEN: "123456789:AAF..."
@@ -27,7 +30,7 @@ services:
       # --- TMDB (movie disambiguation) ---
       # Either a v3 API key or a v4 Read Access Token, both work.
       TMDB_API_KEY: "..."
-      # Language for titles/plots shown in chat (default it-IT)
+      # Language for titles/plots shown in chat; follows BOT_LANGUAGE if left unset.
       # TMDB_LANGUAGE: "it-IT"
 
       # --- Prowlarr (indexer search) ---
@@ -43,10 +46,12 @@ services:
       QBITTORRENT_PASS: "..."
 
       # --- Media ---
-      # Save path AS SEEN BY THE QBITTORRENT CONTAINER. The bot never touches the
-      # filesystem itself (renames go through the qBittorrent API), so no volume
-      # mount is needed here.
-      MEDIA_ROOT_FOLDER: "/volume1/media/Film"
+      # Save paths AS SEEN BY THE QBITTORRENT CONTAINER — pick the folders your Plex
+      # libraries point at. The bot never touches the filesystem itself (renames go
+      # through the qBittorrent API), so no volume mount is needed here.
+      MEDIA_ROOT_FOLDER: "/media/Movies"
+      # TV seasons are saved under "<tv-root>/Show (Year)/Season NN"
+      MEDIA_TV_ROOT_FOLDER: "/media/TV"
 
       # How often to poll qBittorrent for completed downloads (ISO-8601, default PT30S)
       # DOWNLOAD_POLL_INTERVAL: "PT30S"

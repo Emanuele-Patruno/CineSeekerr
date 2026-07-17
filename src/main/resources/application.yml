@@ -14,6 +14,8 @@ spring:
 # All secrets and environment-specific values come from environment variables.
 # See README.md for the full list and docker-compose.yml for a working example.
 cineseekerr:
+  # Language of the bot's own messages/buttons on Telegram: "en" (default) or "it".
+  language: ${BOT_LANGUAGE:en}
   telegram:
     bot-token: ${TELEGRAM_BOT_TOKEN:}
     # Comma-separated list of Telegram chat IDs allowed to talk to the bot.
@@ -23,7 +25,9 @@ cineseekerr:
     # Either a v3 API key or a v4 Read Access Token — both are supported.
     api-key: ${TMDB_API_KEY:}
     base-url: ${TMDB_BASE_URL:https://api.themoviedb.org/3}
-    language: ${TMDB_LANGUAGE:it-IT}
+    # Left blank by default so it follows BOT_LANGUAGE (see CineSeekerrProperties);
+    # set explicitly to show titles/plots in a language different from the bot's UI.
+    language: ${TMDB_LANGUAGE:}
   prowlarr:
     base-url: ${PROWLARR_URL:}
     api-key: ${PROWLARR_API_KEY:}
@@ -32,8 +36,13 @@ cineseekerr:
     username: ${QBITTORRENT_USER:}
     password: ${QBITTORRENT_PASS:}
   media:
+    # Required, no default: a wrong guess here would make qBittorrent save into a path
+    # that doesn't exist in its container ("errored" torrents), so the bot refuses to
+    # start instead. Both paths are AS SEEN BY THE QBITTORRENT CONTAINER.
     # Save path passed to qBittorrent and later renamed to "Title (Year)" for Plex.
-    root-folder: ${MEDIA_ROOT_FOLDER:/volume1/media/Film}
+    root-folder: ${MEDIA_ROOT_FOLDER}
+    # Save path for TV series; season packs land in "<tv-root>/Show (Year)/Season NN".
+    tv-root-folder: ${MEDIA_TV_ROOT_FOLDER}
   download:
     # How often the bot polls qBittorrent for completed downloads (ISO-8601 duration).
     poll-interval: ${DOWNLOAD_POLL_INTERVAL:PT30S}
