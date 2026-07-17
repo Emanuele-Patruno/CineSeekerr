@@ -34,9 +34,8 @@ stack, but any Docker host works.
   specific episode (`S02E10`), perfect for series still airing. TMDB's season count can be
   wrong for some shows — a "type a different number" option is always there as an escape
   hatch.
-- **Smart release parsing** — resolution, audio languages (incl. Italian scene tags like
-  `iTA-ENG`, `DLMux`, `BDMux`), subtitles (`SUB iTA`…), codec and source are extracted
-  from every release name.
+- **Smart release parsing** — resolution, audio language, subtitles, codec and source
+  are extracted from every release name, including common scene-naming conventions.
 - **Dynamic filters, never a dead end** — filter buttons are built from the actual
   results (`Quality: [1080p (14)] [2160p (6)] [720p (3)]`); an option leading to zero
   results is never offered, and steps with a single option are skipped.
