@@ -20,8 +20,9 @@ the `*arr` family (Radarr, Sonarr, Prowlarr) it plugs into. Designed for a small
 stack, but any Docker host works.
 
 <p align="center">
-  <img src="docs/screenshot-placeholder.png" alt="Bot conversation screenshot" width="380">
-  <br><em>(screenshot coming soon)</em>
+  <img src="docs/screenshot/search-and-audio.jpeg" alt="Searching a movie and choosing the audio language" width="260">
+  <img src="docs/screenshot/subtitles.jpeg" alt="Choosing subtitles" width="260">
+  <img src="docs/screenshot/quality.jpeg" alt="Choosing the quality" width="260">
 </p>
 
 ## ✨ Features
