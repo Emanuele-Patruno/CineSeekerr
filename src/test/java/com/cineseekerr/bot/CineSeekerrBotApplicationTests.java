@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "cineseekerr.qbittorrent.base-url=http://localhost:8080",
         "cineseekerr.qbittorrent.username=admin",
         "cineseekerr.qbittorrent.password=dummy",
+        "cineseekerr.download.state-file=target/test-data/pending-downloads.json",
 })
 class CineSeekerrBotApplicationTests {
 

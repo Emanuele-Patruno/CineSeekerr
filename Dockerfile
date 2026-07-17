@@ -13,6 +13,9 @@ RUN mvn -B -q package -DskipTests
 # ---------- Runtime stage ----------
 FROM eclipse-temurin:21-jre-alpine
 RUN addgroup -S cineseekerr && adduser -S cineseekerr -G cineseekerr
+# Holds the pending-downloads state file (see DOWNLOAD_STATE_FILE); mount a volume here
+# so a container recreation doesn't lose track of in-flight downloads.
+RUN mkdir -p /data && chown cineseekerr:cineseekerr /data
 USER cineseekerr
 WORKDIR /app
 

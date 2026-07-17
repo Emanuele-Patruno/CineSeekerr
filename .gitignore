@@ -17,3 +17,7 @@ Thumbs.db
 # Local environment (never commit secrets)
 .env
 *.local.yml
+
+# Local run artifacts (scripts/run-local.ps1 output, pending-downloads state file)
+local-run*.log
+/data/

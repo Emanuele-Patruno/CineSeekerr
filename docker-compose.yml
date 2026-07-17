@@ -50,8 +50,17 @@ services:
 
       # How often to poll qBittorrent for completed downloads (ISO-8601, default PT30S)
       # DOWNLOAD_POLL_INTERVAL: "PT30S"
+    volumes:
+      # Keeps track of in-flight downloads across restarts (see the "data" volume below).
+      - data:/data
     networks:
       - media
+
+volumes:
+  # Small JSON file with the downloads the bot is still waiting on. Without this volume
+  # a restart mid-download loses track of the pending Plex rename (the download itself
+  # is unaffected, only the automatic rename/notification).
+  data:
 
 networks:
   # The pre-existing network shared with Prowlarr/qBittorrent. If your stack was

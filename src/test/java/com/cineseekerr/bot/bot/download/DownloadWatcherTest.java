@@ -4,12 +4,15 @@ import com.cineseekerr.bot.bot.telegram.TelegramMessenger;
 import com.cineseekerr.bot.client.ApiClientException;
 import com.cineseekerr.bot.client.QbittorrentClient;
 import com.cineseekerr.bot.model.QbtTorrent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 
@@ -39,12 +42,16 @@ class DownloadWatcherTest {
     @Mock
     private TelegramMessenger messenger;
 
+    @TempDir
+    private Path tempDir;
+
     private DownloadTracker tracker;
     private DownloadWatcher watcher;
 
     @BeforeEach
     void setUp() {
-        tracker = new DownloadTracker();
+        tracker = new DownloadTracker(new ObjectMapper().findAndRegisterModules(),
+                tempDir.resolve("pending-downloads.json").toString());
         watcher = new DownloadWatcher(tracker, qbittorrent, renameService, messenger);
     }
 

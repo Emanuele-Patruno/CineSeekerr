@@ -37,6 +37,10 @@ cineseekerr:
   download:
     # How often the bot polls qBittorrent for completed downloads (ISO-8601 duration).
     poll-interval: ${DOWNLOAD_POLL_INTERVAL:PT30S}
+    # Where the list of in-flight downloads is mirrored, so a restart doesn't lose track
+    # of a download that still needs to be renamed for Plex. Mount a volume over its
+    # parent folder to survive container recreation.
+    state-file: ${DOWNLOAD_STATE_FILE:/data/pending-downloads.json}
 
 logging:
   level:
