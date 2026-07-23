@@ -11,7 +11,9 @@ import com.cineseekerr.bot.client.ProwlarrClient;
 import com.cineseekerr.bot.client.QbittorrentClient;
 import com.cineseekerr.bot.client.TmdbClient;
 import com.cineseekerr.bot.config.CineSeekerrProperties;
+import com.cineseekerr.bot.model.Language;
 import com.cineseekerr.bot.model.MediaType;
+import com.cineseekerr.bot.model.ProwlarrIndexer;
 import com.cineseekerr.bot.model.ProwlarrRelease;
 import com.cineseekerr.bot.model.QbtTorrent;
 import com.cineseekerr.bot.model.TmdbSeason;
@@ -33,6 +35,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -44,6 +47,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -221,13 +225,13 @@ class ConversationHandlerTest {
         @Test
         void movieSelectionSearchesProwlarrWithBothOriginalAndLocalizedTitle() {
             reachMovieChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(releases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
 
             handler.onCallback(CHAT, MSG, "cb1", "movie:0");
 
             verify(messenger).answerCallback("cb1");
-            verify(prowlarr).search("Dune: Part Two 2024", MediaType.MOVIE);
-            verify(prowlarr).search("Dune: Parte Due 2024", MediaType.MOVIE);
+            verify(prowlarr).search(eq("Dune: Part Two 2024"), eq(MediaType.MOVIE), any());
+            verify(prowlarr).search(eq("Dune: Parte Due 2024"), eq(MediaType.MOVIE), any());
             verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("Scegli l'audio"), any());
             assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_AUDIO);
         }
@@ -237,9 +241,9 @@ class ConversationHandlerTest {
             reachMovieChoice();
             // the iTA release comes back from both queries (same guid) plus an
             // Italian-titled one only the localized query finds
-            when(prowlarr.search(eq("Dune: Part Two 2024"), any()))
+            when(prowlarr.search(eq("Dune: Part Two 2024"), any(), any()))
                     .thenReturn(List.of(release("Dune.Part.Two.2024.iTA.ENG.1080p.BluRay.x264-GRP", 100, "http://dl-ita")));
-            when(prowlarr.search(eq("Dune: Parte Due 2024"), any()))
+            when(prowlarr.search(eq("Dune: Parte Due 2024"), any(), any()))
                     .thenReturn(List.of(
                             release("Dune.Part.Two.2024.iTA.ENG.1080p.BluRay.x264-GRP", 100, "http://dl-ita"),
                             release("Dune.Parte.Due.2024.iTA.2160p.WEB-DL-GRP", 40, "http://dl-loc")));
@@ -255,7 +259,7 @@ class ConversationHandlerTest {
         void identicalOriginalAndLocalizedTitlesTriggerASingleQuery() {
             when(tmdb.searchTitles("breaking bad")).thenReturn(List.of(tvShow()));
             when(tmdb.seasons(1396)).thenReturn(List.of(new TmdbSeason(1, 7)));
-            when(prowlarr.search(anyString(), any())).thenReturn(List.of(
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of(
                     release("Breaking.Bad.S01.iTA.1080p-GRP", 50, "http://dl")));
             handler.onTextMessage(CHAT, "breaking bad");
             handler.onCallback(CHAT, MSG, "cb1", "movie:0");
@@ -263,14 +267,15 @@ class ConversationHandlerTest {
 
             handler.onCallback(CHAT, MSG, "cb3", "episode:all");
 
-            verify(prowlarr).search("Breaking Bad", MediaType.TV);
+            verify(prowlarr).listIndexers();
+            verify(prowlarr).search(eq("Breaking Bad"), eq(MediaType.TV), any());
             verifyNoMoreInteractions(prowlarr);
         }
 
         @Test
         void noReleasesEndsTheConversation() {
             reachMovieChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(List.of());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of());
 
             handler.onCallback(CHAT, MSG, "cb1", "movie:0");
 
@@ -281,7 +286,7 @@ class ConversationHandlerTest {
         @Test
         void audioItalianNarrowsResultsThenAsksForQualityWhenSubsOfferNoChoice() {
             reachMovieChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(releases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
             handler.onCallback(CHAT, MSG, "cb1", "movie:0");
 
             handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
@@ -297,7 +302,7 @@ class ConversationHandlerTest {
         @Test
         void qualityIsTheLastFilterBeforeTheShortlist() {
             reachMovieChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(releases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
             handler.onCallback(CHAT, MSG, "cb1", "movie:0");
             handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
 
@@ -312,15 +317,264 @@ class ConversationHandlerTest {
         @Test
         void shortlistIsSortedBySeeders() {
             reachMovieChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(releases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:any");
+            handler.onCallback(CHAT, MSG, "cb3", "subs:any");
+            handler.onCallback(CHAT, MSG, "cb4", "quality:any");
+            // x264 (2 releases) vs x265 (1 release) still differ → format is asked too
+            handler.onCallback(CHAT, MSG, "cb5", "format:any");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.shortlist()).extracting(r -> r.release().seeders())
+                    .containsExactly(100, 80, 50);
+        }
+
+        @Test
+        void formatStepAsksWhenCodecsDifferAndNarrowsResults() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
             handler.onCallback(CHAT, MSG, "cb1", "movie:0");
             handler.onCallback(CHAT, MSG, "cb2", "audio:any");
             handler.onCallback(CHAT, MSG, "cb3", "subs:any");
             handler.onCallback(CHAT, MSG, "cb4", "quality:any");
 
+            handler.onCallback(CHAT, MSG, "cb5", "format:X264");
+
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("Scegli il formato"), any());
             ConversationState state = store.find(CHAT).get();
-            assertThat(state.shortlist()).extracting(r -> r.release().seeders())
-                    .containsExactly(100, 80, 50);
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+            assertThat(state.filtered()).hasSize(2);
+        }
+
+        @Test
+        void backButtonOnShortlistReturnsToFormatStepWhenItWasActuallyShown() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:any");
+            handler.onCallback(CHAT, MSG, "cb3", "subs:any");
+            handler.onCallback(CHAT, MSG, "cb4", "quality:any");
+            handler.onCallback(CHAT, MSG, "cb5", "format:X264");
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+
+            handler.onCallback(CHAT, MSG, "cb6", "back");
+
+            verify(messenger, times(2)).editHtml(eq(CHAT), eq(MSG), contains("Scegli il formato"), any());
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_FORMAT);
+            assertThat(state.formatFilter()).isNull();
+            assertThat(state.filtered()).as("back to format resets to the full result set").hasSize(3);
+        }
+
+        @Test
+        void reselectingTheSameQualityAfterGoingBackAsksFormatAgain() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:any");
+            handler.onCallback(CHAT, MSG, "cb3", "subs:any");
+            handler.onCallback(CHAT, MSG, "cb4", "quality:any");
+            handler.onCallback(CHAT, MSG, "cb5", "format:X264");
+            handler.onCallback(CHAT, MSG, "cb6", "back"); // shortlist -> format
+            handler.onCallback(CHAT, MSG, "cb7", "back"); // format -> quality
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_QUALITY);
+
+            handler.onCallback(CHAT, MSG, "cb8", "quality:any");
+
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_FORMAT);
+        }
+
+        @Test
+        void audioStepHasNoBackButtonSinceItIsTheFirstStep() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            assertThat(store.find(CHAT).get().backAction()).isNull();
+        }
+
+        @Test
+        void backButtonOnSubtitleStepReturnsToAudioStepWithFreshBuckets() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:any");
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_SUBTITLES);
+
+            handler.onCallback(CHAT, MSG, "cb3", "back");
+
+            // shown once on the way forward, once again on the way back
+            verify(messenger, times(2)).editHtml(eq(CHAT), eq(MSG), contains("Scegli l'audio"), any());
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_AUDIO);
+            assertThat(state.audioFilter()).isNull();
+            assertThat(state.filtered()).as("back to audio resets to the full result set").hasSize(3);
+        }
+
+        @Test
+        void backButtonOnQualityStepReturnsToSubtitleStepWhenItWasActuallyShown() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:any");
+            handler.onCallback(CHAT, MSG, "cb3", "subs:any");
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_QUALITY);
+
+            handler.onCallback(CHAT, MSG, "cb4", "back");
+
+            verify(messenger, times(2)).editHtml(eq(CHAT), eq(MSG), contains("Sottotitoli"), any());
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_SUBTITLES);
+            assertThat(state.subtitleFilter()).isNull();
+        }
+
+        @Test
+        void backButtonOnQualityStepSkipsStraightToAudioWhenSubtitleStepHadBeenSkipped() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            // ITA narrows to 2 releases, neither has a subtitle tag -> subtitle step is
+            // skipped and quality's back button must point all the way to audio
+            handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_QUALITY);
+
+            handler.onCallback(CHAT, MSG, "cb3", "back");
+
+            verify(messenger, times(2)).editHtml(eq(CHAT), eq(MSG), contains("Scegli l'audio"), any());
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_AUDIO);
+            assertThat(state.filtered()).hasSize(3);
+        }
+
+        @Test
+        void goingBackThenPickingADifferentAudioNarrowsResultsAgain() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
+            handler.onCallback(CHAT, MSG, "cb3", "back");
+
+            handler.onCallback(CHAT, MSG, "cb4", "audio:ENG");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.audioFilter()).isEqualTo(Language.ENG);
+            // ENG explicit (2 releases) plus the MULTI release, which counts for any
+            // real language too
+            assertThat(state.filtered()).hasSize(3);
+        }
+
+        @Test
+        void backButtonOnShortlistReturnsToQualityStep() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
+            handler.onCallback(CHAT, MSG, "cb3", "quality:R1080P");
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+
+            handler.onCallback(CHAT, MSG, "cb4", "back");
+
+            verify(messenger, times(2)).editHtml(eq(CHAT), eq(MSG), contains("Scegli la qualità"), any());
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_QUALITY);
+            assertThat(state.qualityFilter()).isNull();
+        }
+
+        @Test
+        void backButtonChainFromShortlistWalksAllTheWayBackToAudio() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
+            handler.onCallback(CHAT, MSG, "cb3", "quality:R1080P");
+
+            handler.onCallback(CHAT, MSG, "cb4", "back"); // shortlist -> quality
+            handler.onCallback(CHAT, MSG, "cb5", "back"); // quality -> audio (subs was skipped)
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_AUDIO);
+            assertThat(state.filtered()).hasSize(3);
+        }
+    }
+
+    @Nested
+    class IndexerSelection {
+
+        private static ProwlarrIndexer indexer(int id, String name) {
+            return new ProwlarrIndexer(id, name, true);
+        }
+
+        private void reachIndexerChoice() {
+            when(tmdb.searchTitles("dune")).thenReturn(List.of(movie()));
+            when(prowlarr.listIndexers()).thenReturn(List.of(indexer(1, "IndexerA"), indexer(2, "IndexerB")));
+            handler.onTextMessage(CHAT, "dune");
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+        }
+
+        @Test
+        void showsAllIndexersPreselectedWhenThereAreAtLeastTwo() {
+            reachIndexerChoice();
+
+            ArgumentCaptor<InlineKeyboardMarkup> keyboard = ArgumentCaptor.forClass(InlineKeyboardMarkup.class);
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), anyString(), keyboard.capture());
+            assertThat(keyboard.getValue().getKeyboard().get(0).get(0).getText())
+                    .as("preselected with a checkmark")
+                    .isEqualTo("✅ IndexerA");
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_INDEXER_CHOICE);
+            assertThat(state.selectedIndexerIds()).containsExactlyInAnyOrder(1, 2);
+            verify(prowlarr, never()).search(anyString(), any(), any());
+        }
+
+        @Test
+        void togglingAnIndexerDeselectsItAndTogglingAgainReselectsIt() {
+            reachIndexerChoice();
+
+            handler.onCallback(CHAT, MSG, "cb2", "idx:1");
+            assertThat(store.find(CHAT).get().selectedIndexerIds()).containsExactly(2);
+
+            handler.onCallback(CHAT, MSG, "cb3", "idx:1");
+            assertThat(store.find(CHAT).get().selectedIndexerIds()).containsExactlyInAnyOrder(1, 2);
+        }
+
+        @Test
+        void confirmingSearchWithASubsetOnlyQueriesThoseIndexers() {
+            reachIndexerChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+
+            handler.onCallback(CHAT, MSG, "cb2", "idx:1"); // deselect indexer 1, keep only 2
+            handler.onCallback(CHAT, MSG, "cb3", "idxsearch");
+
+            verify(prowlarr).search(eq("Dune: Part Two 2024"), eq(MediaType.MOVIE), eq(Set.of(2)));
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_AUDIO);
+        }
+
+        @Test
+        void confirmingWithNothingSelectedShowsAWarningAndStaysOnTheStep() {
+            reachIndexerChoice();
+
+            handler.onCallback(CHAT, MSG, "cb2", "idx:1");
+            handler.onCallback(CHAT, MSG, "cb3", "idx:2");
+            handler.onCallback(CHAT, MSG, "cb4", "idxsearch");
+
+            // shown once as soon as the last indexer is deselected, again after "Search"
+            verify(messenger, times(2)).editHtml(eq(CHAT), eq(MSG), contains("Seleziona almeno un indexer"), any());
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_INDEXER_CHOICE);
+            verify(prowlarr, never()).search(anyString(), any(), any());
+        }
+
+        @Test
+        void stepIsSkippedEntirelyWhenFewerThanTwoIndexersAreConfigured() {
+            when(tmdb.searchTitles("dune")).thenReturn(List.of(movie()));
+            when(prowlarr.listIndexers()).thenReturn(List.of(indexer(1, "OnlyOne")));
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+            handler.onTextMessage(CHAT, "dune");
+
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_AUDIO);
         }
     }
 
@@ -329,7 +583,7 @@ class ConversationHandlerTest {
 
         private void reachShortlist() {
             reachMovieChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(releases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
             handler.onCallback(CHAT, MSG, "cb1", "movie:0");
             handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
             handler.onCallback(CHAT, MSG, "cb3", "quality:R1080P");
@@ -452,14 +706,14 @@ class ConversationHandlerTest {
             when(tracker.findByTorrentName(TORRENT_NAME)).thenReturn(Optional.of(
                     Map.entry("trackerkey", new DownloadTracker.PendingDownload(
                             CHAT, TORRENT_NAME, "Dune Parte Due (2024)", movie(), null, null, Instant.now()))));
-            when(prowlarr.search(anyString(), any())).thenReturn(releases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
 
             handler.onCallback(CHAT, MSG, "cb1", "retrystalled:hash1");
 
             verify(qbittorrent).deleteTorrent("hash1", true);
             verify(tracker).remove("trackerkey");
             verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("fermato"), isNull());
-            verify(prowlarr).search("Dune: Part Two 2024", MediaType.MOVIE);
+            verify(prowlarr).search(eq("Dune: Part Two 2024"), eq(MediaType.MOVIE), any());
             assertThat(store.find(CHAT)).isPresent();
             assertThat(store.find(CHAT).get().title()).isEqualTo(movie());
         }
@@ -471,7 +725,7 @@ class ConversationHandlerTest {
             when(tracker.findByTorrentName(TORRENT_NAME)).thenReturn(Optional.of(
                     Map.entry("trackerkey", new DownloadTracker.PendingDownload(
                             CHAT, TORRENT_NAME, "Dune Parte Due (2024)", movie(), null, null, Instant.now()))));
-            when(prowlarr.search(anyString(), any())).thenReturn(releases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
 
             handler.onCallback(CHAT, MSG, "cb1", "retrystalled:hash1");
 
@@ -509,12 +763,12 @@ class ConversationHandlerTest {
                     Map.entry("trackerkey", new DownloadTracker.PendingDownload(
                             CHAT, tvTorrent, "Breaking Bad (2008) — Stagione 2", tvShow(), 2, null,
                             Instant.now()))));
-            when(prowlarr.search(anyString(), any())).thenReturn(List.of(
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of(
                     release("Breaking.Bad.S02.iTA.ENG.1080p.BDMux-GRP", 60, "http://dl-s02")));
 
             handler.onCallback(CHAT, MSG, "cb1", "retrystalled:hash1");
 
-            verify(prowlarr).search("Breaking Bad", MediaType.TV);
+            verify(prowlarr).search(eq("Breaking Bad"), eq(MediaType.TV), any());
             assertThat(store.find(CHAT)).isPresent();
             assertThat(store.find(CHAT).get().season()).isEqualTo(2);
         }
@@ -619,7 +873,7 @@ class ConversationHandlerTest {
         @Test
         void manualEpisodeOverridePromptsForATypedNumberAndSearchesForIt() {
             reachSeasonChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(tvReleases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(tvReleases());
             handler.onCallback(CHAT, MSG, "cb2", "season:1");
 
             handler.onCallback(CHAT, MSG, "cb3", "episode:manual");
@@ -654,12 +908,12 @@ class ConversationHandlerTest {
         @Test
         void wholeSeasonKeepsOnlyFullPacksOfThatSeason() {
             reachSeasonChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(tvReleases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(tvReleases());
             handler.onCallback(CHAT, MSG, "cb2", "season:1");
 
             handler.onCallback(CHAT, MSG, "cb3", "episode:all");
 
-            verify(prowlarr).search("Breaking Bad", MediaType.TV);
+            verify(prowlarr).search(eq("Breaking Bad"), eq(MediaType.TV), any());
             ConversationState state = store.find(CHAT).get();
             assertThat(state.filtered())
                     .as("the single S01E05 episode and the S02 pack are excluded")
@@ -670,7 +924,7 @@ class ConversationHandlerTest {
         @Test
         void singleEpisodeChoiceKeepsOnlyThatEpisode() {
             reachSeasonChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(tvReleases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(tvReleases());
             handler.onCallback(CHAT, MSG, "cb2", "season:1");
 
             handler.onCallback(CHAT, MSG, "cb3", "episode:5");
@@ -686,7 +940,7 @@ class ConversationHandlerTest {
         void noSeasonPacksEndsTheConversationWithAClearMessage() {
             reachSeasonChoice();
             // only a single episode of the requested season exists, no pack
-            when(prowlarr.search(anyString(), any())).thenReturn(List.of(
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of(
                     release("Breaking.Bad.S01E05.iTA.1080p.WEB-DL-GRP", 70, "http://dl-ep")));
             handler.onCallback(CHAT, MSG, "cb2", "season:1");
 
@@ -699,7 +953,7 @@ class ConversationHandlerTest {
         @Test
         void tvDownloadLandsInTheShowFolderAndTracksTheSeason() {
             reachSeasonChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(tvReleases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(tvReleases());
             handler.onCallback(CHAT, MSG, "cb2", "season:1");
             handler.onCallback(CHAT, MSG, "cb3", "episode:all");
             // one pack remains: quality step skipped; audio has ITA+ENG buckets → pick any
@@ -716,7 +970,7 @@ class ConversationHandlerTest {
         @Test
         void episodeDownloadIsSavedIntoTheSeasonFolderAndTracksTheEpisode() {
             reachSeasonChoice();
-            when(prowlarr.search(anyString(), any())).thenReturn(tvReleases());
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(tvReleases());
             handler.onCallback(CHAT, MSG, "cb2", "season:1");
             handler.onCallback(CHAT, MSG, "cb3", "episode:5");
             // single result: audio bucket ITA only → skipped; no subs; single quality → shortlist

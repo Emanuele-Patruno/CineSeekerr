@@ -70,6 +70,10 @@ public class MessageFormatter {
         return resolution == Resolution.UNKNOWN ? messages.get("quality.other") : resolution.label();
     }
 
+    String codecLabel(VideoCodec codec) {
+        return codec == VideoCodec.UNKNOWN ? messages.get("format.other") : codec.label();
+    }
+
     static String subtitleLabel(Language language) {
         return "SUB " + language.label();
     }
@@ -85,6 +89,9 @@ public class MessageFormatter {
         }
         if (state.qualityFilter() != null) {
             parts.add(qualityLabel(state.qualityFilter()));
+        }
+        if (state.formatFilter() != null) {
+            parts.add(codecLabel(state.formatFilter()));
         }
         return parts.isEmpty() ? messages.get("recap.none") : String.join(" · ", parts);
     }

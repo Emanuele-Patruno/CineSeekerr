@@ -2,6 +2,7 @@ package com.cineseekerr.bot.client;
 
 import com.cineseekerr.bot.config.CineSeekerrProperties;
 import com.cineseekerr.bot.model.MediaType;
+import com.cineseekerr.bot.model.ProwlarrIndexer;
 import com.cineseekerr.bot.model.ProwlarrRelease;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +12,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Client for the Prowlarr v1 search API. Queries all configured indexers at once;
@@ -43,16 +45,29 @@ public class ProwlarrClient {
      * usenet results are dropped because the download side of this bot is qBittorrent.
      */
     public List<ProwlarrRelease> search(String query, MediaType mediaType) {
+        return search(query, mediaType, Set.of());
+    }
+
+    /**
+     * Same as {@link #search(String, MediaType)}, restricted to the given indexer IDs; an
+     * empty set searches every configured indexer, same as the two-argument overload.
+     */
+    public List<ProwlarrRelease> search(String query, MediaType mediaType, Set<Integer> indexerIds) {
         String category = mediaType == MediaType.TV ? TV_CATEGORY : MOVIES_CATEGORY;
         List<ProwlarrRelease> results;
         try {
             results = restClient.get()
-                    .uri(uriBuilder -> uriBuilder.path("/api/v1/search")
-                            .queryParam("query", query)
-                            .queryParam("categories", category)
-                            .queryParam("type", "search")
-                            .queryParam("limit", RESULT_LIMIT)
-                            .build())
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/api/v1/search")
+                                .queryParam("query", query)
+                                .queryParam("categories", category)
+                                .queryParam("type", "search")
+                                .queryParam("limit", RESULT_LIMIT);
+                        if (indexerIds != null && !indexerIds.isEmpty()) {
+                            uriBuilder.queryParam("indexerIds", indexerIds.toArray());
+                        }
+                        return uriBuilder.build();
+                    })
                     .retrieve()
                     .body(new ParameterizedTypeReference<List<ProwlarrRelease>>() {
                     });
@@ -70,5 +85,23 @@ public class ProwlarrClient {
         log.debug("Prowlarr search for '{}' returned {} results ({} downloadable torrents)",
                 query, results.size(), downloadable.size());
         return downloadable;
+    }
+
+    /** Enabled indexers configured in Prowlarr, used to let the user restrict a search. */
+    public List<ProwlarrIndexer> listIndexers() {
+        List<ProwlarrIndexer> indexers;
+        try {
+            indexers = restClient.get()
+                    .uri("/api/v1/indexer")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<ProwlarrIndexer>>() {
+                    });
+        } catch (RestClientException e) {
+            throw new ApiClientException("Failed to list Prowlarr indexers", e);
+        }
+        if (indexers == null) {
+            return List.of();
+        }
+        return indexers.stream().filter(ProwlarrIndexer::enable).toList();
     }
 }
