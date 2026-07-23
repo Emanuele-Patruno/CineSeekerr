@@ -4,6 +4,7 @@ import com.cineseekerr.bot.model.Language;
 import com.cineseekerr.bot.model.ParsedRelease;
 import com.cineseekerr.bot.model.Resolution;
 import com.cineseekerr.bot.model.SearchResult;
+import com.cineseekerr.bot.model.VideoCodec;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,6 +26,8 @@ public final class ReleaseFilters {
 
     private static final List<Resolution> RESOLUTION_ORDER =
             List.of(Resolution.R2160P, Resolution.R1080P, Resolution.R720P, Resolution.UNKNOWN);
+    private static final List<VideoCodec> CODEC_ORDER =
+            List.of(VideoCodec.AV1, VideoCodec.X265, VideoCodec.X264, VideoCodec.XVID, VideoCodec.UNKNOWN);
 
     private ReleaseFilters() {
     }
@@ -82,6 +85,20 @@ public final class ReleaseFilters {
         return buckets;
     }
 
+    /** Codec buckets with counts, best-compression first; empty buckets are omitted. */
+    public static Map<VideoCodec, Long> formatBuckets(List<SearchResult> results) {
+        Map<VideoCodec, Long> buckets = new LinkedHashMap<>();
+        for (VideoCodec codec : CODEC_ORDER) {
+            long count = results.stream()
+                    .filter(r -> r.parsed().codec() == codec)
+                    .count();
+            if (count > 0) {
+                buckets.put(codec, count);
+            }
+        }
+        return buckets;
+    }
+
     public static List<SearchResult> byQuality(List<SearchResult> results, Resolution resolution) {
         if (resolution == null) {
             return results;
@@ -106,6 +123,15 @@ public final class ReleaseFilters {
         }
         return results.stream()
                 .filter(r -> matchesSubtitle(r.parsed(), language))
+                .toList();
+    }
+
+    public static List<SearchResult> byFormat(List<SearchResult> results, VideoCodec codec) {
+        if (codec == null) {
+            return results;
+        }
+        return results.stream()
+                .filter(r -> r.parsed().codec() == codec)
                 .toList();
     }
 

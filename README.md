@@ -34,11 +34,16 @@ stack, but any Docker host works.
   specific episode (`S02E10`), perfect for series still airing. TMDB's season count can be
   wrong for some shows — a "type a different number" option is always there as an escape
   hatch.
+- **Pick which indexers to search** — when Prowlarr has more than one enabled indexer,
+  toggle which ones to query before searching; skipped automatically when there's only
+  one to choose from.
 - **Smart release parsing** — resolution, audio language, subtitles, codec and source
   are extracted from every release name, including common scene-naming conventions.
-- **Dynamic filters, never a dead end** — filter buttons are built from the actual
-  results (`Quality: [1080p (14)] [2160p (6)] [720p (3)]`); an option leading to zero
-  results is never offered, and steps with a single option are skipped.
+- **Dynamic filters, never a dead end** — audio → subtitles → quality → format (codec)
+  buttons are built from the actual results (`Quality: [1080p (14)] [2160p (6)] [720p
+  (3)]`); an option leading to zero results is never offered, steps with a single option
+  are skipped, and a "back" button lets you revisit an earlier choice without losing the
+  original result set.
 - **Language-aware filtering** — audio/subtitle buckets are built from the tags actually
   found in the results (ITA, ENG, FRE, GER, SPA, JAP, KOR, RUS, POR…), so picking a
   preferred audio and subtitle language is one tap away; picking a language also includes
@@ -167,7 +172,7 @@ The project intentionally keeps the parser (`ReleaseNameParser`) pure and framew
 if you want to improve scene-name coverage, that class plus its ~50-case test suite is
 the only place to touch.
 
-Notable test coverage: 130+ tests including the full conversation flow (mocked Telegram),
+Notable test coverage: 200+ tests including the full conversation flow (mocked Telegram),
 qBittorrent session expiry/re-login, dynamic filter invariants ("never offer a
 zero-result option") and 45+ real-world release names.
 

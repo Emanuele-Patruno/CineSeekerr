@@ -13,12 +13,14 @@ import com.cineseekerr.bot.client.TmdbClient;
 import com.cineseekerr.bot.config.CineSeekerrProperties;
 import com.cineseekerr.bot.model.Language;
 import com.cineseekerr.bot.model.MediaType;
+import com.cineseekerr.bot.model.ProwlarrIndexer;
 import com.cineseekerr.bot.model.ProwlarrRelease;
 import com.cineseekerr.bot.model.QbtTorrent;
 import com.cineseekerr.bot.model.Resolution;
 import com.cineseekerr.bot.model.SearchResult;
 import com.cineseekerr.bot.model.TmdbSeason;
 import com.cineseekerr.bot.model.TmdbTitle;
+import com.cineseekerr.bot.model.VideoCodec;
 import com.cineseekerr.bot.parser.ReleaseNameParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,9 +47,9 @@ import static com.cineseekerr.bot.bot.MessageFormatter.esc;
  * The conversation state machine, one instance shared by all chats.
  *
  * <p>Flow: free text (or {@code /cerca}) → TMDB candidates (movies and TV series mixed) →
- * for TV, season choice → Prowlarr search → dynamic quality/audio/subtitle filters (each
- * computed from the actual result set, steps with a single option are skipped) → top-5 by
- * seeders → send to qBittorrent.
+ * for TV, season choice → Prowlarr search → dynamic audio/subtitle/quality/format filters
+ * (each computed from the actual result set, steps with a single option are skipped) →
+ * top-5 by seeders → send to qBittorrent.
  *
  * <p>All interactive steps edit the same Telegram message; callback data carries only
  * short tokens (e.g. {@code quality:R1080P}), everything else lives in
@@ -162,12 +164,19 @@ public class ConversationHandler {
                         () -> onEpisodeChosen(chatId, state, value));
                 case "quality" -> whenStep(state, ConversationStep.AWAITING_QUALITY,
                         () -> onQualityChosen(chatId, state, value));
+                case "format" -> whenStep(state, ConversationStep.AWAITING_FORMAT,
+                        () -> onFormatChosen(chatId, state, value));
                 case "audio" -> whenStep(state, ConversationStep.AWAITING_AUDIO,
                         () -> onAudioChosen(chatId, state, value));
                 case "subs" -> whenStep(state, ConversationStep.AWAITING_SUBTITLES,
                         () -> onSubtitlesChosen(chatId, state, value));
                 case "release" -> whenStep(state, ConversationStep.AWAITING_RELEASE_CHOICE,
                         () -> onReleaseChosen(chatId, state, parseIndex(value, state.shortlist().size())));
+                case "idx" -> whenStep(state, ConversationStep.AWAITING_INDEXER_CHOICE,
+                        () -> onIndexerToggled(chatId, state, value));
+                case "idxsearch" -> whenStep(state, ConversationStep.AWAITING_INDEXER_CHOICE,
+                        () -> onIndexerSearchConfirmed(chatId, state));
+                case "back" -> onBack(state);
                 default -> log.debug("Unknown callback action '{}' from chat {}", action, chatId);
             }
         } catch (ApiClientException e) {
@@ -326,7 +335,7 @@ public class ConversationHandler {
         if (state.title().isTv()) {
             showSeasonStep(chatId, state);
         } else {
-            searchReleasesFor(chatId, state);
+            showIndexerStep(chatId, state);
         }
     }
 
@@ -436,7 +445,7 @@ public class ConversationHandler {
             }
             state.setEpisode(episode);
         }
-        searchReleasesFor(chatId, state);
+        showIndexerStep(chatId, state);
     }
 
     private void onManualEpisodeEntered(long chatId, ConversationState state, String text) {
@@ -446,7 +455,7 @@ public class ConversationHandler {
             return;
         }
         state.setEpisode(episode);
-        searchReleasesFor(chatId, state);
+        showIndexerStep(chatId, state);
     }
 
     private static Integer parsePositiveInt(String text) {
@@ -471,6 +480,65 @@ public class ConversationHandler {
     }
 
     /**
+     * Lets the user restrict the search to a subset of the indexers configured in
+     * Prowlarr, or search all of them (the default, nothing excluded). Skipped when
+     * Prowlarr has fewer than two enabled indexers, since there is nothing to choose.
+     */
+    private void showIndexerStep(long chatId, ConversationState state) {
+        List<ProwlarrIndexer> indexers = prowlarrClient.listIndexers();
+        state.setIndexers(indexers);
+        state.setSelectedIndexerIds(indexers.stream().map(ProwlarrIndexer::id).collect(Collectors.toSet()));
+        if (indexers.size() < 2) {
+            searchReleasesFor(chatId, state);
+            return;
+        }
+        state.setStep(ConversationStep.AWAITING_INDEXER_CHOICE);
+        renderIndexerStep(chatId, state);
+    }
+
+    private void renderIndexerStep(long chatId, ConversationState state) {
+        List<InlineKeyboardRow> rows = new ArrayList<>();
+        for (ProwlarrIndexer indexer : state.indexers()) {
+            boolean selected = state.selectedIndexerIds().contains(indexer.id());
+            rows.add(new InlineKeyboardRow(button(
+                    (selected ? "✅ " : "⬜ ") + MessageFormatter.truncate(indexer.name(), 28),
+                    "idx:" + indexer.id())));
+        }
+        rows.add(new InlineKeyboardRow(button(
+                messages.get("indexer.search.button", state.selectedIndexerIds().size()), "idxsearch")));
+        rows.add(cancelRow());
+
+        String prompt = messages.get("indexer.prompt");
+        if (state.selectedIndexerIds().isEmpty()) {
+            prompt = messages.get("indexer.none.selected") + "\n\n" + prompt;
+        }
+        saveAndEdit(chatId, state, prompt, keyboard(rows));
+    }
+
+    private void onIndexerToggled(long chatId, ConversationState state, String value) {
+        int indexerId;
+        try {
+            indexerId = Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return;
+        }
+        Set<Integer> selected = new HashSet<>(state.selectedIndexerIds());
+        if (!selected.remove(indexerId)) {
+            selected.add(indexerId);
+        }
+        state.setSelectedIndexerIds(selected);
+        renderIndexerStep(chatId, state);
+    }
+
+    private void onIndexerSearchConfirmed(long chatId, ConversationState state) {
+        if (state.selectedIndexerIds().isEmpty()) {
+            renderIndexerStep(chatId, state);
+            return;
+        }
+        searchReleasesFor(chatId, state);
+    }
+
+    /**
      * Starts a brand new search for a title we already know unambiguously — used when a
      * stalled-download notification's "retry" button is pressed, long after the original
      * search conversation is gone.
@@ -490,7 +558,7 @@ public class ConversationHandler {
         String label = MessageFormatter.titleLabel(title) + seasonEpisodeSuffix(state);
         editFlowMessage(chatId, state, messages.get("search.searching", esc(label)), null);
 
-        List<SearchResult> results = searchIndexers(title).stream()
+        List<SearchResult> results = searchIndexers(title, state).stream()
                 .map(release -> new SearchResult(release, parser.parse(release.title())))
                 // for TV: either the exact episode, or only full packs of the chosen season
                 .filter(result -> !tv || state.season() == null
@@ -508,8 +576,19 @@ public class ConversationHandler {
             editFlowMessage(chatId, state, messages.get(noneKey, esc(label)), null);
             return;
         }
-        state.setFiltered(results);
+        state.setAllResults(results);
+        recomputeFiltered(state);
         showAudioStep(chatId, state);
+    }
+
+    /** Rebuilds {@link ConversationState#filtered()} from scratch from {@code allResults}. */
+    private void recomputeFiltered(ConversationState state) {
+        List<SearchResult> results = state.allResults();
+        results = ReleaseFilters.byAudio(results, state.audioFilter());
+        results = ReleaseFilters.bySubtitle(results, state.subtitleFilter());
+        results = ReleaseFilters.byQuality(results, state.qualityFilter());
+        results = ReleaseFilters.byFormat(results, state.formatFilter());
+        state.setFiltered(results);
     }
 
     /**
@@ -518,15 +597,16 @@ public class ConversationHandler {
      * "Legally Blonde") — so when the two differ, both are searched and the results are
      * merged, deduplicated by guid.
      */
-    private List<ProwlarrRelease> searchIndexers(TmdbTitle title) {
+    private List<ProwlarrRelease> searchIndexers(TmdbTitle title, ConversationState state) {
         MediaType type = title.isTv() ? MediaType.TV : MediaType.MOVIE;
+        Set<Integer> indexerIds = state.selectedIndexerIds();
         List<ProwlarrRelease> results = new ArrayList<>(
-                prowlarrClient.search(prowlarrQuery(title, originalName(title)), type));
+                prowlarrClient.search(prowlarrQuery(title, originalName(title)), type, indexerIds));
         if (!originalName(title).equalsIgnoreCase(title.title())) {
             Set<String> seen = results.stream()
                     .map(ConversationHandler::dedupKey)
                     .collect(Collectors.toCollection(HashSet::new));
-            prowlarrClient.search(prowlarrQuery(title, title.title()), type).stream()
+            prowlarrClient.search(prowlarrQuery(title, title.title()), type, indexerIds).stream()
                     .filter(release -> seen.add(dedupKey(release)))
                     .forEach(results::add);
         }
@@ -555,50 +635,115 @@ public class ConversationHandler {
     // ------------------------------------------------------------------ filter steps
 
     // Step order: audio first (the deciding factor for an Italian-speaking household),
-    // then subtitles, then quality last. The three steps share the same shape (bucket
-    // buttons + "any" + cancel, skip when there is nothing to choose), so each one just
-    // parameterizes showFilterStep.
-
-    private void showQualityStep(long chatId, ConversationState state) {
-        showFilterStep(chatId, state, ReleaseFilters.qualityBuckets(state.filtered()), 2,
-                formatter::qualityLabel, "quality", "option.any", "step.quality",
-                ConversationStep.AWAITING_QUALITY,
-                state::setQualityFilter, () -> showShortlist(chatId, state));
-    }
-
-    private void onQualityChosen(long chatId, ConversationState state, String value) {
-        Resolution resolution = parseFilter(value, Resolution.class);
-        state.setQualityFilter(resolution);
-        state.setFiltered(ReleaseFilters.byQuality(state.filtered(), resolution));
-        showShortlist(chatId, state);
-    }
+    // then subtitles, then quality, then format last. All four steps share the same shape
+    // (bucket buttons + "any" + cancel, skip when there is nothing to choose), so each one
+    // just parameterizes showFilterStep.
 
     private void showAudioStep(long chatId, ConversationState state) {
         showFilterStep(chatId, state, ReleaseFilters.audioBuckets(state.filtered()), 2,
                 Language::label, "audio", "option.any", "step.audio",
                 ConversationStep.AWAITING_AUDIO,
-                state::setAudioFilter, () -> showSubtitleStep(chatId, state));
+                state::setAudioFilter, () -> showSubtitleStep(chatId, state, null), null);
     }
 
     private void onAudioChosen(long chatId, ConversationState state, String value) {
         Language language = parseFilter(value, Language.class);
         state.setAudioFilter(language);
-        state.setFiltered(ReleaseFilters.byAudio(state.filtered(), language));
-        showSubtitleStep(chatId, state);
+        recomputeFiltered(state);
+        showSubtitleStep(chatId, state, () -> backToAudio(chatId, state));
     }
 
-    private void showSubtitleStep(long chatId, ConversationState state) {
+    private void showSubtitleStep(long chatId, ConversationState state, Runnable backAction) {
         showFilterStep(chatId, state, ReleaseFilters.subtitleBuckets(state.filtered()), 1,
                 MessageFormatter::subtitleLabel, "subs", "option.subs.any", "step.subtitles",
                 ConversationStep.AWAITING_SUBTITLES,
-                state::setSubtitleFilter, () -> showQualityStep(chatId, state));
+                state::setSubtitleFilter, () -> showQualityStep(chatId, state, backAction), backAction);
     }
 
     private void onSubtitlesChosen(long chatId, ConversationState state, String value) {
+        // whatever the subtitle step's own "back" currently does, re-used below so that
+        // re-showing it later (from quality's back button) points to the same place
+        Runnable subtitleBackAction = state.backAction();
         Language language = parseFilter(value, Language.class);
         state.setSubtitleFilter(language);
-        state.setFiltered(ReleaseFilters.bySubtitle(state.filtered(), language));
-        showQualityStep(chatId, state);
+        recomputeFiltered(state);
+        showQualityStep(chatId, state, () -> backToSubtitle(chatId, state, subtitleBackAction));
+    }
+
+    private void showQualityStep(long chatId, ConversationState state, Runnable backAction) {
+        showFilterStep(chatId, state, ReleaseFilters.qualityBuckets(state.filtered()), 2,
+                formatter::qualityLabel, "quality", "option.any", "step.quality",
+                ConversationStep.AWAITING_QUALITY,
+                state::setQualityFilter, () -> showFormatStep(chatId, state, backAction), backAction);
+    }
+
+    private void onQualityChosen(long chatId, ConversationState state, String value) {
+        Runnable qualityBackAction = state.backAction();
+        Resolution resolution = parseFilter(value, Resolution.class);
+        state.setQualityFilter(resolution);
+        recomputeFiltered(state);
+        showFormatStep(chatId, state, () -> backToQuality(chatId, state, qualityBackAction));
+    }
+
+    private void showFormatStep(long chatId, ConversationState state, Runnable backAction) {
+        showFilterStep(chatId, state, ReleaseFilters.formatBuckets(state.filtered()), 2,
+                formatter::codecLabel, "format", "option.any", "step.format",
+                ConversationStep.AWAITING_FORMAT,
+                state::setFormatFilter, () -> showShortlist(chatId, state, backAction), backAction);
+    }
+
+    private void onFormatChosen(long chatId, ConversationState state, String value) {
+        Runnable formatBackAction = state.backAction();
+        VideoCodec codec = parseFilter(value, VideoCodec.class);
+        state.setFormatFilter(codec);
+        recomputeFiltered(state);
+        showShortlist(chatId, state, () -> backToFormat(chatId, state, formatBackAction));
+    }
+
+    /** "Back" from the subtitle step: forget audio (and anything after) and ask again. */
+    private void backToAudio(long chatId, ConversationState state) {
+        state.setAudioFilter(null);
+        state.setSubtitleFilter(null);
+        state.setQualityFilter(null);
+        state.setFormatFilter(null);
+        recomputeFiltered(state);
+        showAudioStep(chatId, state);
+    }
+
+    /**
+     * "Back" from the quality step: forget subtitles (and anything after) and ask again,
+     * re-using whatever back target the subtitle step itself had (so a chain of "back"
+     * presses can walk all the way to audio without ever landing on a skipped, invisible
+     * step).
+     */
+    private void backToSubtitle(long chatId, ConversationState state, Runnable subtitleBackAction) {
+        state.setSubtitleFilter(null);
+        state.setQualityFilter(null);
+        state.setFormatFilter(null);
+        recomputeFiltered(state);
+        showSubtitleStep(chatId, state, subtitleBackAction);
+    }
+
+    /** "Back" from the format step: forget quality (and format) and ask again, same idea as above. */
+    private void backToQuality(long chatId, ConversationState state, Runnable qualityBackAction) {
+        state.setQualityFilter(null);
+        state.setFormatFilter(null);
+        recomputeFiltered(state);
+        showQualityStep(chatId, state, qualityBackAction);
+    }
+
+    /** "Back" from the release shortlist: forget format and ask again, same idea as above. */
+    private void backToFormat(long chatId, ConversationState state, Runnable formatBackAction) {
+        state.setFormatFilter(null);
+        recomputeFiltered(state);
+        showFormatStep(chatId, state, formatBackAction);
+    }
+
+    private void onBack(ConversationState state) {
+        Runnable action = state.backAction();
+        if (action != null) {
+            action.run();
+        }
     }
 
     /**
@@ -606,13 +751,16 @@ public class ConversationHandler {
      * real choices — clears that filter and jumps straight to {@code skipTo}. Audio and
      * quality need at least 2 buckets to be worth asking; subtitles are shown even with a
      * single bucket, because "none" (no subtitle tag) is itself a meaningful alternative.
+     * {@code backAction}, when non-{@code null}, adds a "back" button that re-does the
+     * previous filter step; {@code null} means this step has nothing to go back to.
      */
     private <T extends Enum<T>> void showFilterStep(long chatId, ConversationState state,
                                                     Map<T, Long> buckets, int minOptions,
                                                     Function<T, String> label, String action,
                                                     String anyKey, String promptKey,
                                                     ConversationStep step,
-                                                    Consumer<T> setFilter, Runnable skipTo) {
+                                                    Consumer<T> setFilter, Runnable skipTo,
+                                                    Runnable backAction) {
         if (buckets.size() < minOptions) {
             setFilter.accept(null);
             skipTo.run();
@@ -623,8 +771,12 @@ public class ConversationHandler {
                         action + ":" + e.getKey().name()))
                 .toList());
         rows.add(new InlineKeyboardRow(button(messages.get(anyKey, state.filtered().size()), action + ":" + ANY)));
+        if (backAction != null) {
+            rows.add(new InlineKeyboardRow(button(messages.get("filter.back.button"), "back")));
+        }
         rows.add(cancelRow());
 
+        state.setBackAction(backAction);
         state.setStep(step);
         saveAndEdit(chatId, state,
                 formatter.stepHeader(state) + messages.get(promptKey), keyboard(rows));
@@ -636,7 +788,7 @@ public class ConversationHandler {
 
     // ------------------------------------------------------------------ shortlist & download
 
-    private void showShortlist(long chatId, ConversationState state) {
+    private void showShortlist(long chatId, ConversationState state, Runnable backAction) {
         List<SearchResult> shortlist = state.filtered().stream()
                 .limit(MAX_SHORTLIST)
                 .toList();
@@ -647,8 +799,12 @@ public class ConversationHandler {
             numberRow.add(button(NUMBER_EMOJI[i], "release:" + i));
         }
         List<InlineKeyboardRow> rows = new ArrayList<>(List.of(numberRow));
+        if (backAction != null) {
+            rows.add(new InlineKeyboardRow(button(messages.get("filter.back.button"), "back")));
+        }
         rows.add(cancelRow());
 
+        state.setBackAction(backAction);
         state.setStep(ConversationStep.AWAITING_RELEASE_CHOICE);
         saveAndEdit(chatId, state, formatter.shortlistText(state), keyboard(rows));
     }
