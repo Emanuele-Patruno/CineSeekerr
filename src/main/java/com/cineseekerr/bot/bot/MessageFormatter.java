@@ -136,9 +136,14 @@ public class MessageFormatter {
         return String.join(" · ", tech);
     }
 
-    String shortlistText(ConversationState state) {
+    /** {@code page} and {@code totalPages} are 0-based/total; the page suffix is omitted when there's only one. */
+    String shortlistText(ConversationState state, int page, int totalPages) {
         StringBuilder sb = new StringBuilder(stepHeader(state))
-                .append(messages.get("shortlist.header")).append("\n\n");
+                .append(messages.get("shortlist.header"));
+        if (totalPages > 1) {
+            sb.append(' ').append(messages.get("shortlist.page", page + 1, totalPages));
+        }
+        sb.append("\n\n");
         List<SearchResult> shortlist = state.shortlist();
         for (int i = 0; i < shortlist.size(); i++) {
             SearchResult result = shortlist.get(i);

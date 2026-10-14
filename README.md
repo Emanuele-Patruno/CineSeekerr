@@ -51,8 +51,8 @@ stack, but any Docker host works.
 - **Speaks your language** — the bot's own messages are available in English and Italian
   (`BOT_LANGUAGE`), and it searches indexers with both the original and the localized
   title, merging the results.
-- **Top-5 by seeders** — with size, indexer and parsed details, one tap to send it to
-  your download client.
+- **Paged shortlist by seeders** — 5 releases per page (◀️/▶️ to browse further), with
+  size, indexer and parsed details, one tap to send it to your download client.
 - **Downloads survive a restart** — in-flight downloads are mirrored to disk, so a
   container restart doesn't lose track of the Plex rename it still owes you.
 - **Stalled-download detection** — a download stuck at 0 seeders for 2 hours gets a single
@@ -172,7 +172,7 @@ The project intentionally keeps the parser (`ReleaseNameParser`) pure and framew
 if you want to improve scene-name coverage, that class plus its ~50-case test suite is
 the only place to touch.
 
-Notable test coverage: 200+ tests including the full conversation flow (mocked Telegram),
+Notable test coverage: 220+ tests including the full conversation flow (mocked Telegram),
 qBittorrent session expiry/re-login, dynamic filter invariants ("never offer a
 zero-result option") and 45+ real-world release names.
 

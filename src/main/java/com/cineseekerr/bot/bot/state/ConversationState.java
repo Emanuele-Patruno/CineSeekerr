@@ -40,6 +40,8 @@ public final class ConversationState {
     private Language subtitleFilter;
     private VideoCodec formatFilter;
     private List<SearchResult> shortlist = List.of();
+    /** 0-based index of the shortlist page currently shown ({@link #filtered()} split into pages of 5). */
+    private int page;
     /** Telegram message the bot keeps editing instead of sending new ones. */
     private Integer messageId;
     /** What running "back" on the current filter step does; {@code null} means no back button. */
@@ -163,6 +165,14 @@ public final class ConversationState {
 
     public void setShortlist(List<SearchResult> shortlist) {
         this.shortlist = List.copyOf(shortlist);
+    }
+
+    public int page() {
+        return page;
+    }
+
+    public void setPage(int page) {
+        this.page = page;
     }
 
     public Integer messageId() {

@@ -500,6 +500,114 @@ class ConversationHandlerTest {
     }
 
     @Nested
+    class Pagination {
+
+        /** Seven identical-tag releases (all filters skip), seeders descending, GRP0 first. */
+        private List<ProwlarrRelease> releasesForPaging() {
+            return List.of(
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP0", 700, "http://dl0"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP1", 600, "http://dl1"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP2", 500, "http://dl2"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP3", 400, "http://dl3"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP4", 300, "http://dl4"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP5", 200, "http://dl5"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP6", 100, "http://dl6"));
+        }
+
+        @Test
+        void firstPageShowsTheTopFiveWithOnlyANextButton() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releasesForPaging());
+
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+            assertThat(state.page()).isZero();
+            assertThat(state.shortlist()).extracting(r -> r.release().seeders())
+                    .containsExactly(700, 600, 500, 400, 300);
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("pagina 1/2"), any());
+        }
+
+        @Test
+        void nextButtonShowsTheRemainingTwoReleases() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releasesForPaging());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            handler.onCallback(CHAT, MSG, "cb2", "page:next");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.page()).isEqualTo(1);
+            assertThat(state.shortlist()).extracting(r -> r.release().seeders())
+                    .containsExactly(200, 100);
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("pagina 2/2"), any());
+        }
+
+        @Test
+        void prevButtonReturnsToTheFirstPage() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releasesForPaging());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "page:next");
+
+            handler.onCallback(CHAT, MSG, "cb3", "page:prev");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.page()).isZero();
+            assertThat(state.shortlist()).extracting(r -> r.release().seeders())
+                    .containsExactly(700, 600, 500, 400, 300);
+        }
+
+        @Test
+        void goingPastTheLastPageIsIgnored() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releasesForPaging());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "page:next");
+
+            handler.onCallback(CHAT, MSG, "cb3", "page:next");
+
+            assertThat(store.find(CHAT).get().page()).isEqualTo(1);
+        }
+
+        @Test
+        void goingBeforeTheFirstPageIsIgnored() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releasesForPaging());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            handler.onCallback(CHAT, MSG, "cb2", "page:prev");
+
+            assertThat(store.find(CHAT).get().page()).isZero();
+        }
+
+        @Test
+        void releaseIndexOnTheSecondPageResolvesRelativeToThatPage() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releasesForPaging());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "page:next");
+
+            handler.onCallback(CHAT, MSG, "cb3", "release:1");
+
+            verify(qbittorrent).addTorrent("http://dl6", "/volume1/media/Film", "film");
+        }
+
+        @Test
+        void noPaginationButtonsWhenEverythingFitsOnOnePage() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(releases());
+
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "audio:ITA");
+            handler.onCallback(CHAT, MSG, "cb3", "quality:R1080P");
+
+            verify(messenger, never()).editHtml(eq(CHAT), eq(MSG), contains("pagina"), any());
+        }
+    }
+
+    @Nested
     class IndexerSelection {
 
         private static ProwlarrIndexer indexer(int id, String name) {

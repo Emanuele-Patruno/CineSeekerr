@@ -49,7 +49,7 @@ import static com.cineseekerr.bot.bot.MessageFormatter.esc;
  * <p>Flow: free text (or {@code /cerca}) → TMDB candidates (movies and TV series mixed) →
  * for TV, season choice → Prowlarr search → dynamic audio/subtitle/quality/format filters
  * (each computed from the actual result set, steps with a single option are skipped) →
- * top-5 by seeders → send to qBittorrent.
+ * paged shortlist by seeders → send to qBittorrent.
  *
  * <p>All interactive steps edit the same Telegram message; callback data carries only
  * short tokens (e.g. {@code quality:R1080P}), everything else lives in
@@ -61,6 +61,7 @@ public class ConversationHandler {
     private static final Logger log = LoggerFactory.getLogger(ConversationHandler.class);
 
     private static final int MAX_CANDIDATES = 5;
+    /** Releases shown per shortlist page. */
     private static final int MAX_SHORTLIST = 5;
     private static final String ANY = "any";
 
@@ -172,6 +173,8 @@ public class ConversationHandler {
                         () -> onSubtitlesChosen(chatId, state, value));
                 case "release" -> whenStep(state, ConversationStep.AWAITING_RELEASE_CHOICE,
                         () -> onReleaseChosen(chatId, state, parseIndex(value, state.shortlist().size())));
+                case "page" -> whenStep(state, ConversationStep.AWAITING_RELEASE_CHOICE,
+                        () -> onPageChanged(chatId, state, value));
                 case "idx" -> whenStep(state, ConversationStep.AWAITING_INDEXER_CHOICE,
                         () -> onIndexerToggled(chatId, state, value));
                 case "idxsearch" -> whenStep(state, ConversationStep.AWAITING_INDEXER_CHOICE,
@@ -788,25 +791,64 @@ public class ConversationHandler {
 
     // ------------------------------------------------------------------ shortlist & download
 
+    /** Entry point after the last filter: starts on page 0 of the (possibly multi-page) shortlist. */
     private void showShortlist(long chatId, ConversationState state, Runnable backAction) {
-        List<SearchResult> shortlist = state.filtered().stream()
+        state.setPage(0);
+        state.setBackAction(backAction);
+        state.setStep(ConversationStep.AWAITING_RELEASE_CHOICE);
+        renderShortlist(chatId, state);
+    }
+
+    private void onPageChanged(long chatId, ConversationState state, String value) {
+        int page = state.page() + ("next".equals(value) ? 1 : -1);
+        if (page < 0 || page >= totalPages(state)) {
+            return;
+        }
+        state.setPage(page);
+        renderShortlist(chatId, state);
+    }
+
+    /**
+     * Renders the current page of {@link ConversationState#filtered()}, {@value #MAX_SHORTLIST}
+     * releases at a time, best seeders first (the list is already sorted that way and filters
+     * never reorder it). {@code ◀️}/{@code ▶️} buttons appear only when there is another page in
+     * that direction; there is no technical Telegram button-count limit at play here, five per
+     * page is just a comfortable amount to read at once.
+     */
+    private void renderShortlist(long chatId, ConversationState state) {
+        int totalPages = totalPages(state);
+        List<SearchResult> pageItems = state.filtered().stream()
+                .skip((long) state.page() * MAX_SHORTLIST)
                 .limit(MAX_SHORTLIST)
                 .toList();
-        state.setShortlist(shortlist);
+        state.setShortlist(pageItems);
 
         InlineKeyboardRow numberRow = new InlineKeyboardRow();
-        for (int i = 0; i < shortlist.size(); i++) {
+        for (int i = 0; i < pageItems.size(); i++) {
             numberRow.add(button(NUMBER_EMOJI[i], "release:" + i));
         }
         List<InlineKeyboardRow> rows = new ArrayList<>(List.of(numberRow));
-        if (backAction != null) {
+
+        if (totalPages > 1) {
+            InlineKeyboardRow pageRow = new InlineKeyboardRow();
+            if (state.page() > 0) {
+                pageRow.add(button("◀️", "page:prev"));
+            }
+            if (state.page() < totalPages - 1) {
+                pageRow.add(button("▶️", "page:next"));
+            }
+            rows.add(pageRow);
+        }
+        if (state.backAction() != null) {
             rows.add(new InlineKeyboardRow(button(messages.get("filter.back.button"), "back")));
         }
         rows.add(cancelRow());
 
-        state.setBackAction(backAction);
-        state.setStep(ConversationStep.AWAITING_RELEASE_CHOICE);
-        saveAndEdit(chatId, state, formatter.shortlistText(state), keyboard(rows));
+        saveAndEdit(chatId, state, formatter.shortlistText(state, state.page(), totalPages), keyboard(rows));
+    }
+
+    private int totalPages(ConversationState state) {
+        return Math.max(1, (state.filtered().size() + MAX_SHORTLIST - 1) / MAX_SHORTLIST);
     }
 
     private void onReleaseChosen(long chatId, ConversationState state, int index) {
