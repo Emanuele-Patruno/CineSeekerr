@@ -1,6 +1,7 @@
 package com.cineseekerr.bot.bot;
 
 import com.cineseekerr.bot.bot.download.DownloadTracker;
+import com.cineseekerr.bot.bot.download.PreferredAuthors;
 import com.cineseekerr.bot.bot.state.ConversationState;
 import com.cineseekerr.bot.bot.state.ConversationStep;
 import com.cineseekerr.bot.bot.state.ConversationStateStore;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -31,6 +33,9 @@ import org.mockito.quality.Strictness;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +51,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -73,6 +79,10 @@ class ConversationHandlerTest {
 
     private final ConversationStateStore store = new InMemoryConversationStateStore();
 
+    @TempDir
+    Path tempDir;
+
+    private PreferredAuthors preferredAuthors;
     private ConversationHandler handler;
 
     @BeforeEach
@@ -83,8 +93,9 @@ class ConversationHandlerTest {
                 new CineSeekerrProperties.Media("/volume1/media/Film", "/volume1/media/Serie TV"),
                 "it");
         Messages messages = new Messages(properties);
+        preferredAuthors = new PreferredAuthors(new ObjectMapper(), tempDir.resolve("pending.json").toString());
         handler = new ConversationHandler(tmdb, prowlarr, qbittorrent, new ReleaseNameParser(),
-                messenger, store, tracker, properties, messages, new MessageFormatter(messages));
+                messenger, store, tracker, preferredAuthors, properties, messages, new MessageFormatter(messages));
         when(messenger.sendHtml(anyLong(), anyString(), any())).thenReturn(MSG);
     }
 
@@ -604,6 +615,297 @@ class ConversationHandlerTest {
             handler.onCallback(CHAT, MSG, "cb3", "quality:R1080P");
 
             verify(messenger, never()).editHtml(eq(CHAT), eq(MSG), contains("pagina"), any());
+        }
+    }
+
+    @Nested
+    class LongReleaseTitles {
+
+        @Test
+        void shortlistShowsALongReleaseTitleInFull() {
+            // no language tag, so no audio/subtitle step stands between the search and the shortlist
+            String longTitle = "Dune.Part.Two.2024.2160p.UHD.BluRay.REMUX.HDR10Plus.HEVC.TrueHD.7.1.Atmos."
+                    + "x265-SomeVeryLongGroupName.And.More";
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of(release(longTitle, 10, "http://dl")));
+
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            assertThat(longTitle.length()).isGreaterThan(80);
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), contains(longTitle), any());
+        }
+
+        @Test
+        void absurdlyLongTitlesAreStillCutSoTheMessageFitsTelegramsLimit() {
+            String absurd = "Dune." + "x".repeat(400);
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of(release(absurd, 10, "http://dl")));
+
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            verify(messenger, never()).editHtml(eq(CHAT), eq(MSG), contains(absurd), any());
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("x".repeat(200) + "…"), any());
+        }
+    }
+
+    @Nested
+    class NameFilter {
+
+        /** All 1080p ITA, so only the format step is asked: two x264 and one x265. */
+        private List<ProwlarrRelease> namedReleases() {
+            return List.of(
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-AlphaGroup", 300, "http://dl-alphagroup"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x265-BetaGroup", 200, "http://dl-betagroup"),
+                    release("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-GRP", 100, "http://dl-grp"));
+        }
+
+        private void reachShortlist() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(namedReleases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "format:any");
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+        }
+
+        private List<InlineKeyboardButton> lastShortlistButtons() {
+            ArgumentCaptor<InlineKeyboardMarkup> keyboard = ArgumentCaptor.forClass(InlineKeyboardMarkup.class);
+            verify(messenger, atLeastOnce())
+                    .editHtml(eq(CHAT), eq(MSG), contains("Migliori release"), keyboard.capture());
+            return keyboard.getValue().getKeyboard().stream().flatMap(List::stream).toList();
+        }
+
+        private List<String> shortlistTitles() {
+            return store.find(CHAT).get().shortlist().stream().map(r -> r.release().title()).toList();
+        }
+
+        @Test
+        void shortlistOffersTheSearchByNameButton() {
+            reachShortlist();
+
+            assertThat(lastShortlistButtons()).extracting(InlineKeyboardButton::getCallbackData)
+                    .contains("namefilter:ask");
+        }
+
+        @Test
+        void askingForANameWaitsForTheText() {
+            reachShortlist();
+
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_NAME_FILTER);
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("Cerca per nome"), any());
+        }
+
+        @Test
+        void typedNameNarrowsTheShortlistIgnoringCase() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+
+            handler.onTextMessage(CHAT, "ALPHAGROUP");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+            assertThat(state.nameFilter()).isEqualTo("ALPHAGROUP");
+            assertThat(shortlistTitles()).containsExactly("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-AlphaGroup");
+            verify(messenger).editHtml(eq(CHAT), eq(MSG), contains("Nome «ALPHAGROUP»"), any());
+        }
+
+        @Test
+        void sceneSeparatorsInTheTitleDoNotGetInTheWay() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+
+            handler.onTextMessage(CHAT, "beta group");
+
+            assertThat(shortlistTitles()).containsExactly("Dune.Part.Two.2024.iTA.1080p.BluRay.x265-BetaGroup");
+        }
+
+        @Test
+        void aNameMatchingNothingIsRejectedAndThePromptStaysOpen() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+
+            handler.onTextMessage(CHAT, "zzz");
+
+            verify(messenger).sendHtml(eq(CHAT), contains("Nessuna release contiene"), isNull());
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_NAME_FILTER);
+            assertThat(state.nameFilter()).isNull();
+            assertThat(state.filtered()).hasSize(3);
+        }
+
+        @Test
+        void nameFilterComposesWithTheEarlierFilters() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(namedReleases());
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "format:X265");
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+
+            handler.onTextMessage(CHAT, "alphagroup"); // an x264 release: already filtered out
+
+            verify(messenger).sendHtml(eq(CHAT), contains("Nessuna release contiene"), isNull());
+            assertThat(store.find(CHAT).get().filtered()).hasSize(1);
+
+            handler.onTextMessage(CHAT, "betagroup");
+
+            assertThat(shortlistTitles()).containsExactly("Dune.Part.Two.2024.iTA.1080p.BluRay.x265-BetaGroup");
+        }
+
+        @Test
+        void removeButtonClearsTheNameFilter() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+            handler.onTextMessage(CHAT, "alphagroup");
+            assertThat(lastShortlistButtons()).extracting(InlineKeyboardButton::getText)
+                    .contains("✖ Rimuovi filtro «alphagroup»");
+
+            handler.onCallback(CHAT, MSG, "cb4", "namefilter:clear");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.nameFilter()).isNull();
+            assertThat(state.filtered()).hasSize(3);
+            assertThat(lastShortlistButtons()).extracting(InlineKeyboardButton::getCallbackData)
+                    .contains("namefilter:ask");
+        }
+
+        @Test
+        void backFirstDropsTheNameFilterThenWalksBackThroughTheSteps() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+            handler.onTextMessage(CHAT, "alphagroup");
+
+            handler.onCallback(CHAT, MSG, "cb4", "back");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+            assertThat(state.nameFilter()).isNull();
+            assertThat(state.filtered()).hasSize(3);
+
+            handler.onCallback(CHAT, MSG, "cb5", "back");
+
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_FORMAT);
+        }
+
+        @Test
+        void backFromThePromptReturnsToTheShortlistUntouched() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+
+            handler.onCallback(CHAT, MSG, "cb4", "namefilter:cancel");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.step()).isEqualTo(ConversationStep.AWAITING_RELEASE_CHOICE);
+            assertThat(state.nameFilter()).isNull();
+            assertThat(state.filtered()).hasSize(3);
+        }
+
+        @Test
+        void pickingAFilteredReleaseDownloadsTheRightOne() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+            handler.onTextMessage(CHAT, "betagroup");
+
+            handler.onCallback(CHAT, MSG, "cb4", "release:0");
+
+            verify(qbittorrent).addTorrent("http://dl-betagroup", "/volume1/media/Film", "film");
+        }
+
+        @Test
+        void filteringFromALaterPageStartsOverOnTheFirstPage() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of(
+                    release("Dune.2024.iTA.1080p.BluRay.x264-GRP0", 700, "http://dl0"),
+                    release("Dune.2024.iTA.1080p.BluRay.x264-GRP1", 600, "http://dl1"),
+                    release("Dune.2024.iTA.1080p.BluRay.x264-GRP2", 500, "http://dl2"),
+                    release("Dune.2024.iTA.1080p.BluRay.x264-GRP3", 400, "http://dl3"),
+                    release("Dune.2024.iTA.1080p.BluRay.x264-GRP4", 300, "http://dl4"),
+                    release("Dune.2024.iTA.1080p.BluRay.x264-GRP5", 200, "http://dl5"),
+                    release("Dune.2024.iTA.1080p.BluRay.x264-GRP6", 100, "http://dl6")));
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+            handler.onCallback(CHAT, MSG, "cb2", "page:next");
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+
+            handler.onTextMessage(CHAT, "grp6");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.page()).isZero();
+            assertThat(shortlistTitles()).containsExactly("Dune.2024.iTA.1080p.BluRay.x264-GRP6");
+        }
+
+        @Test
+        void downloadingRemembersTheBracketedGroupOfTheChosenRelease() {
+            reachMovieChoice();
+            when(prowlarr.search(anyString(), any(), any())).thenReturn(List.of(
+                    release("[ExampleGroup] Dune Part Two - 01 [1080p]", 10, "http://dl")));
+            handler.onCallback(CHAT, MSG, "cb1", "movie:0");
+
+            handler.onCallback(CHAT, MSG, "cb2", "release:0");
+
+            assertThat(preferredAuthors.find(movie().id())).contains("ExampleGroup");
+        }
+
+        @Test
+        void downloadingRemembersTheTypedNameWhenTheTitleHasNoBracketedGroup() {
+            reachShortlist();
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:ask");
+            handler.onTextMessage(CHAT, "alphagroup");
+
+            handler.onCallback(CHAT, MSG, "cb4", "release:0");
+
+            assertThat(preferredAuthors.find(movie().id())).contains("alphagroup");
+        }
+
+        @Test
+        void downloadingWithoutAnyAuthorInformationRemembersNothing() {
+            reachShortlist();
+
+            handler.onCallback(CHAT, MSG, "cb3", "release:0");
+
+            assertThat(preferredAuthors.find(movie().id())).isEmpty();
+        }
+
+        @Test
+        void shortlistOffersTheRememberedAuthorAndTappingItAppliesTheFilter() {
+            preferredAuthors.remember(movie().id(), "betagroup");
+            reachShortlist();
+            assertThat(lastShortlistButtons()).extracting(InlineKeyboardButton::getText)
+                    .contains("⭐ betagroup");
+
+            handler.onCallback(CHAT, MSG, "cb3", "namefilter:remembered");
+
+            ConversationState state = store.find(CHAT).get();
+            assertThat(state.nameFilter()).isEqualTo("betagroup");
+            assertThat(shortlistTitles()).containsExactly("Dune.Part.Two.2024.iTA.1080p.BluRay.x265-BetaGroup");
+        }
+
+        @Test
+        void rememberedAuthorIsNotOfferedWhenItMatchesNothing() {
+            preferredAuthors.remember(movie().id(), "zzz");
+
+            reachShortlist();
+
+            assertThat(lastShortlistButtons()).extracting(InlineKeyboardButton::getCallbackData)
+                    .doesNotContain("namefilter:remembered");
+        }
+
+        @Test
+        void rememberedAuthorIsNotOfferedWhenItMatchesEveryRelease() {
+            preferredAuthors.remember(movie().id(), "dune");
+
+            reachShortlist();
+
+            assertThat(lastShortlistButtons()).extracting(InlineKeyboardButton::getCallbackData)
+                    .doesNotContain("namefilter:remembered");
+        }
+
+        @Test
+        void nameFilterButtonsAreIgnoredOutsideTheShortlist() {
+            reachMovieChoice();
+
+            handler.onCallback(CHAT, MSG, "cb1", "namefilter:ask");
+
+            assertThat(store.find(CHAT).get().step()).isEqualTo(ConversationStep.AWAITING_MOVIE_CHOICE);
         }
     }
 
