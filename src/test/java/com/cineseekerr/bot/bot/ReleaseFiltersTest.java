@@ -113,4 +113,48 @@ class ReleaseFiltersTest {
         ReleaseFilters.subtitleBuckets(results).forEach((language, count) ->
                 assertThat(ReleaseFilters.bySubtitle(results, language)).hasSize(count.intValue()));
     }
+
+    private static SearchResult titled(String title) {
+        ProwlarrRelease release = new ProwlarrRelease(
+                "guid-" + title, title, 1000L, 1, 0, "indexer", 1,
+                "http://dl", null, null, "torrent");
+        ParsedRelease parsed = new ParsedRelease(title, Resolution.R1080P, Set.of(), Set.of(),
+                false, VideoCodec.X264, ReleaseSource.BLURAY, Set.of(), null);
+        return new SearchResult(release, parsed);
+    }
+
+    private final List<SearchResult> named = List.of(
+            titled("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-AlphaGroup"),
+            titled("Dune.Part.Two.2024.iTA.1080p.BluRay.x265-BetaGroup"),
+            titled("Dune Part Two 2024 1080p WEB-DL H264 [GammaGroup]"));
+
+    @Test
+    void byNameMatchesAnywhereInTheTitleIgnoringCase() {
+        assertThat(ReleaseFilters.byName(named, "ALPHAGROUP")).extracting(r -> r.release().title())
+                .containsExactly("Dune.Part.Two.2024.iTA.1080p.BluRay.x264-AlphaGroup");
+        assertThat(ReleaseFilters.byName(named, "gammagroup")).hasSize(1);
+    }
+
+    @Test
+    void byNameIgnoresSceneSeparatorsAndWordOrder() {
+        assertThat(ReleaseFilters.byName(named, "beta group")).hasSize(1);
+        assertThat(ReleaseFilters.byName(named, "group.beta")).hasSize(1);
+        assertThat(ReleaseFilters.byName(named, "web-dl h264")).hasSize(1);
+    }
+
+    @Test
+    void byNameRequiresEveryWordToMatch() {
+        assertThat(ReleaseFilters.byName(named, "alphagroup betagroup")).isEmpty();
+    }
+
+    @Test
+    void nullOrBlankNameMeansNoFilter() {
+        assertThat(ReleaseFilters.byName(named, null)).isSameAs(named);
+        assertThat(ReleaseFilters.byName(named, "   ")).isSameAs(named);
+    }
+
+    @Test
+    void textWithoutLettersOrDigitsMatchesNothing() {
+        assertThat(ReleaseFilters.byName(named, "---")).isEmpty();
+    }
 }

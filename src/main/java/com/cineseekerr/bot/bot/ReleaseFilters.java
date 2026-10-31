@@ -6,8 +6,10 @@ import com.cineseekerr.bot.model.Resolution;
 import com.cineseekerr.bot.model.SearchResult;
 import com.cineseekerr.bot.model.VideoCodec;
 
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -133,6 +135,32 @@ public final class ReleaseFilters {
         return results.stream()
                 .filter(r -> r.parsed().codec() == codec)
                 .toList();
+    }
+
+    /**
+     * Keeps the releases whose title contains every word of {@code text}, ignoring case and
+     * scene separators ({@code "beta group"} matches {@code "Movie.2024-Beta.Group"}). A
+     * {@code null} or blank text means "no filter"; text with no letters or digits matches nothing.
+     */
+    public static List<SearchResult> byName(List<SearchResult> results, String text) {
+        if (text == null || text.isBlank()) {
+            return results;
+        }
+        String normalized = normalizeForSearch(text);
+        if (normalized.isEmpty()) {
+            return List.of();
+        }
+        String[] words = normalized.split(" ");
+        return results.stream()
+                .filter(r -> {
+                    String title = normalizeForSearch(r.release().title());
+                    return Arrays.stream(words).allMatch(title::contains);
+                })
+                .toList();
+    }
+
+    private static String normalizeForSearch(String text) {
+        return text.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]+", " ").strip();
     }
 
     static boolean matchesAudio(ParsedRelease parsed, Language language) {

@@ -2,6 +2,7 @@ package com.cineseekerr.bot.bot;
 
 import com.cineseekerr.bot.bot.download.DownloadTracker;
 import com.cineseekerr.bot.bot.download.PlexRenameService;
+import com.cineseekerr.bot.bot.download.PreferredAuthors;
 import com.cineseekerr.bot.bot.state.ConversationState;
 import com.cineseekerr.bot.bot.state.ConversationStateStore;
 import com.cineseekerr.bot.bot.state.ConversationStep;
@@ -72,6 +73,7 @@ public class ConversationHandler {
     private final TelegramMessenger messenger;
     private final ConversationStateStore stateStore;
     private final DownloadTracker downloadTracker;
+    private final PreferredAuthors preferredAuthors;
     private final CineSeekerrProperties properties;
     private final Messages messages;
     private final MessageFormatter formatter;
@@ -83,6 +85,7 @@ public class ConversationHandler {
                                TelegramMessenger messenger,
                                ConversationStateStore stateStore,
                                DownloadTracker downloadTracker,
+                               PreferredAuthors preferredAuthors,
                                CineSeekerrProperties properties,
                                Messages messages,
                                MessageFormatter formatter) {
@@ -93,6 +96,7 @@ public class ConversationHandler {
         this.messenger = messenger;
         this.stateStore = stateStore;
         this.downloadTracker = downloadTracker;
+        this.preferredAuthors = preferredAuthors;
         this.properties = properties;
         this.messages = messages;
         this.formatter = formatter;
@@ -113,6 +117,8 @@ public class ConversationHandler {
                 onManualSeasonEntered(chatId, state, trimmed);
             } else if (state != null && state.step() == ConversationStep.AWAITING_MANUAL_EPISODE) {
                 onManualEpisodeEntered(chatId, state, trimmed);
+            } else if (state != null && state.step() == ConversationStep.AWAITING_NAME_FILTER) {
+                onNameFilterEntered(chatId, state, trimmed);
             } else {
                 startSearch(chatId, trimmed);
             }
@@ -175,11 +181,12 @@ public class ConversationHandler {
                         () -> onReleaseChosen(chatId, state, parseIndex(value, state.shortlist().size())));
                 case "page" -> whenStep(state, ConversationStep.AWAITING_RELEASE_CHOICE,
                         () -> onPageChanged(chatId, state, value));
+                case "namefilter" -> onNameFilterAction(chatId, state, value);
                 case "idx" -> whenStep(state, ConversationStep.AWAITING_INDEXER_CHOICE,
                         () -> onIndexerToggled(chatId, state, value));
                 case "idxsearch" -> whenStep(state, ConversationStep.AWAITING_INDEXER_CHOICE,
                         () -> onIndexerSearchConfirmed(chatId, state));
-                case "back" -> onBack(state);
+                case "back" -> onBack(chatId, state);
                 default -> log.debug("Unknown callback action '{}' from chat {}", action, chatId);
             }
         } catch (ApiClientException e) {
@@ -591,6 +598,7 @@ public class ConversationHandler {
         results = ReleaseFilters.bySubtitle(results, state.subtitleFilter());
         results = ReleaseFilters.byQuality(results, state.qualityFilter());
         results = ReleaseFilters.byFormat(results, state.formatFilter());
+        results = ReleaseFilters.byName(results, state.nameFilter());
         state.setFiltered(results);
     }
 
@@ -742,7 +750,15 @@ public class ConversationHandler {
         showFormatStep(chatId, state, formatBackAction);
     }
 
-    private void onBack(ConversationState state) {
+    /**
+     * On the shortlist, "back" first drops an active name filter (one press undoes the last
+     * thing the user did); only then does it walk back through the filter steps.
+     */
+    private void onBack(long chatId, ConversationState state) {
+        if (state.step() == ConversationStep.AWAITING_RELEASE_CHOICE && state.nameFilter() != null) {
+            clearNameFilter(chatId, state);
+            return;
+        }
         Runnable action = state.backAction();
         if (action != null) {
             action.run();
@@ -839,12 +855,95 @@ public class ConversationHandler {
             }
             rows.add(pageRow);
         }
+        InlineKeyboardRow nameRow = new InlineKeyboardRow();
+        if (state.nameFilter() == null) {
+            nameRow.add(button(messages.get("namefilter.button"), "namefilter:ask"));
+            rememberedAuthor(state).ifPresent(author -> nameRow.add(button(
+                    messages.get("namefilter.remembered.button",
+                            MessageFormatter.truncate(author, MessageFormatter.NAME_FILTER_PREVIEW)),
+                    "namefilter:remembered")));
+        } else {
+            nameRow.add(button(messages.get("namefilter.clear.button",
+                    MessageFormatter.truncate(state.nameFilter(), MessageFormatter.NAME_FILTER_PREVIEW)),
+                    "namefilter:clear"));
+        }
+        rows.add(nameRow);
         if (state.backAction() != null) {
             rows.add(new InlineKeyboardRow(button(messages.get("filter.back.button"), "back")));
         }
         rows.add(cancelRow());
 
         saveAndEdit(chatId, state, formatter.shortlistText(state, state.page(), totalPages), keyboard(rows));
+    }
+
+    private void onNameFilterAction(long chatId, ConversationState state, String value) {
+        switch (value) {
+            case "ask" -> whenStep(state, ConversationStep.AWAITING_RELEASE_CHOICE, () -> {
+                state.setStep(ConversationStep.AWAITING_NAME_FILTER);
+                saveAndEdit(chatId, state, messages.get("namefilter.prompt"), keyboard(List.of(
+                        new InlineKeyboardRow(button(messages.get("filter.back.button"), "namefilter:cancel")),
+                        cancelRow())));
+            });
+            case "clear" -> whenStep(state, ConversationStep.AWAITING_RELEASE_CHOICE,
+                    () -> clearNameFilter(chatId, state));
+            case "remembered" -> whenStep(state, ConversationStep.AWAITING_RELEASE_CHOICE,
+                    () -> preferredAuthors.find(state.title().id())
+                            .ifPresent(author -> onNameFilterEntered(chatId, state, author)));
+            case "cancel" -> whenStep(state, ConversationStep.AWAITING_NAME_FILTER, () -> {
+                state.setStep(ConversationStep.AWAITING_RELEASE_CHOICE);
+                renderShortlist(chatId, state);
+            });
+            default -> log.debug("Unknown name filter action '{}' from chat {}", value, chatId);
+        }
+    }
+
+    /**
+     * Narrows the shortlist to titles containing {@code text}. A name that matches nothing
+     * is rejected and the prompt stays open, so (as with the other filters) the user is never
+     * left looking at an empty list.
+     */
+    private void onNameFilterEntered(long chatId, ConversationState state, String text) {
+        String previous = state.nameFilter();
+        state.setNameFilter(text);
+        recomputeFiltered(state);
+        if (state.filtered().isEmpty()) {
+            state.setNameFilter(previous);
+            recomputeFiltered(state);
+            messenger.sendHtml(chatId, messages.get("namefilter.none",
+                    esc(MessageFormatter.truncate(text, MessageFormatter.NAME_FILTER_PREVIEW))), null);
+            return;
+        }
+        state.setPage(0);
+        state.setStep(ConversationStep.AWAITING_RELEASE_CHOICE);
+        renderShortlist(chatId, state);
+    }
+
+    /**
+     * The author last downloaded from for this title, offered only if it would narrow the
+     * current list (at least one match, and not simply every release).
+     */
+    private Optional<String> rememberedAuthor(ConversationState state) {
+        return preferredAuthors.find(state.title().id()).filter(author -> {
+            int matches = ReleaseFilters.byName(state.filtered(), author).size();
+            return matches > 0 && matches < state.filtered().size();
+        });
+    }
+
+    /**
+     * What to remember for next time: the release's own bracketed group when it has one,
+     * otherwise whatever name the user typed to find it.
+     */
+    private void rememberAuthor(ConversationState state, SearchResult chosen) {
+        ReleaseGroups.leadingGroup(chosen.release().title())
+                .or(() -> Optional.ofNullable(state.nameFilter()))
+                .ifPresent(author -> preferredAuthors.remember(state.title().id(), author));
+    }
+
+    private void clearNameFilter(long chatId, ConversationState state) {
+        state.setNameFilter(null);
+        recomputeFiltered(state);
+        state.setPage(0);
+        renderShortlist(chatId, state);
     }
 
     private int totalPages(ConversationState state) {
@@ -877,12 +976,13 @@ public class ConversationHandler {
                 DownloadTracker.QBT_CATEGORY);
         downloadTracker.track(chatId, chosen.release().title(), plexName, title,
                 tv ? state.season() : null, tv ? state.episode() : null);
+        rememberAuthor(state, chosen);
         stateStore.clear(chatId);
 
         editFlowMessage(chatId, state,
                 messages.get("download.sent.title") + "\n\n"
                         + MessageFormatter.icon(title) + " <b>" + esc(plexName) + "</b>\n"
-                        + "<code>" + esc(MessageFormatter.truncate(chosen.release().title(), 80)) + "</code>\n\n"
+                        + "<code>" + esc(MessageFormatter.truncate(chosen.release().title(), MessageFormatter.MAX_RELEASE_TITLE)) + "</code>\n\n"
                         + messages.get("download.sent.footer"), null);
         log.info("Chat {} queued download '{}' as '{}'", chatId, chosen.release().title(), plexName);
     }

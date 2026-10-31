@@ -53,6 +53,12 @@ stack, but any Docker host works.
   title, merging the results.
 - **Paged shortlist by seeders** — 5 releases per page (◀️/▶️ to browse further), with
   size, indexer and parsed details, one tap to send it to your download client.
+- **Search by name** — on the shortlist, 🔎 narrows the results to titles containing a
+  word you type (an uploader, a release group…); case and `.`/`-` separators don't
+  matter, it stacks on top of the other filters, and "back" undoes it.
+- **Remembers your preferred author** — after a download the bot remembers the group (the
+  `[Group]` at the start of anime titles) or the name you searched for, per title; for
+  the next episode or season a ⭐ button applies it in one tap.
 - **Downloads survive a restart** — in-flight downloads are mirrored to disk, so a
   container restart doesn't lose track of the Plex rename it still owes you.
 - **Stalled-download detection** — a download stuck at 0 seeders for 2 hours gets a single
@@ -172,7 +178,7 @@ The project intentionally keeps the parser (`ReleaseNameParser`) pure and framew
 if you want to improve scene-name coverage, that class plus its ~50-case test suite is
 the only place to touch.
 
-Notable test coverage: 220+ tests including the full conversation flow (mocked Telegram),
+Notable test coverage: 270+ tests including the full conversation flow (mocked Telegram),
 qBittorrent session expiry/re-login, dynamic filter invariants ("never offer a
 zero-result option") and 45+ real-world release names.
 

@@ -39,6 +39,8 @@ public final class ConversationState {
     private Language audioFilter;
     private Language subtitleFilter;
     private VideoCodec formatFilter;
+    /** Free text the user typed on the shortlist to narrow it to release titles containing it; {@code null} = none. */
+    private String nameFilter;
     private List<SearchResult> shortlist = List.of();
     /** 0-based index of the shortlist page currently shown ({@link #filtered()} split into pages of 5). */
     private int page;
@@ -157,6 +159,14 @@ public final class ConversationState {
 
     public void setFormatFilter(VideoCodec formatFilter) {
         this.formatFilter = formatFilter;
+    }
+
+    public String nameFilter() {
+        return nameFilter;
+    }
+
+    public void setNameFilter(String nameFilter) {
+        this.nameFilter = nameFilter;
     }
 
     public List<SearchResult> shortlist() {

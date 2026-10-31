@@ -25,6 +25,16 @@ import java.util.stream.Collectors;
 public class MessageFormatter {
 
     static final String[] NUMBER_EMOJI = {"1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"};
+    /** Longest name filter shown back to the user (recap line, remove button) before it is cut. */
+    static final int NAME_FILTER_PREVIEW = 25;
+    /**
+     * Release titles are shown in full in practice; this cap only guards against absurdly long
+     * ones, since Telegram rejects messages over 4096 characters (five shortlist entries at
+     * this length plus their details stay well under that).
+     */
+    static final int MAX_RELEASE_TITLE = 250;
+    /** {@code /stato} lists every active download in one message, so its names get a tighter cap. */
+    private static final int MAX_STATUS_NAME = 120;
 
     private final Messages messages;
 
@@ -93,6 +103,9 @@ public class MessageFormatter {
         if (state.formatFilter() != null) {
             parts.add(codecLabel(state.formatFilter()));
         }
+        if (state.nameFilter() != null) {
+            parts.add(messages.get("recap.name", esc(truncate(state.nameFilter(), NAME_FILTER_PREVIEW))));
+        }
         return parts.isEmpty() ? messages.get("recap.none") : String.join(" · ", parts);
     }
 
@@ -154,7 +167,7 @@ public class MessageFormatter {
                     .append('\n')
                     .append(releaseSummary(result))
                     .append('\n')
-                    .append("<code>").append(esc(truncate(result.release().title(), 80))).append("</code>")
+                    .append("<code>").append(esc(truncate(result.release().title(), MAX_RELEASE_TITLE))).append("</code>")
                     .append("\n\n");
         }
         sb.append(messages.get("shortlist.prompt"));
@@ -162,7 +175,7 @@ public class MessageFormatter {
     }
 
     String torrentStatusLine(QbtTorrent torrent) {
-        String name = truncate(torrent.name(), 60);
+        String name = truncate(torrent.name(), MAX_STATUS_NAME);
         if (torrent.isComplete()) {
             return messages.get("status.line.done", esc(name));
         }
